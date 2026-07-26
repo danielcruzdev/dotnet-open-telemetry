@@ -5,7 +5,7 @@ Divisão do projeto em tarefas verificáveis. Referência: [PRD.md](PRD.md).
 **Regra:** uma tarefa só é marcada `[x]` quando a linha `verificar:` foi executada e passou. Build quebrado, teste falhando ou verificação pulada = tarefa não concluída. O agent `spec-keeper` mantém este arquivo.
 
 **Iniciado em:** 2026-07-26
-**Status atual:** Fases 0 a 4 concluídas e verificadas em 2026-07-26. 103 testes verdes. A cadeia BFF -> Core -> Proxy funciona ponta a ponta. Próxima: Fase 5 (testes) e Fase 6 (validação E2E no dashboard)
+**Status atual:** Fases 0 a 5 concluídas e verificadas em 2026-07-26. 123 testes verdes. A cadeia BFF -> Core -> Proxy funciona ponta a ponta. Próxima: Fase 6 (validação E2E no dashboard)
 
 ---
 
@@ -292,22 +292,56 @@ Agent: `slice-builder` · Skill: `telemetry-testing`
 
 Esta fase é o que impede a correlação de regredir em silêncio.
 
-- [ ] **5.1** Projetos de teste para os 3 serviços, espelhando as pastas de slice; `public partial class Program;` em cada serviço
+Concluída em 2026-07-26 · **123 testes** em 4 projetos
+
+Boa parte já existia: os projetos de teste nasceram nas Fases 1 a 4 porque as verificações daquelas tarefas exigiam. Esta fase foi auditoria tarefa a tarefa, e achou três buracos reais.
+
+- [x] **5.1** Projetos de teste para os 3 serviços, espelhando as pastas de slice; `public partial class Program;` em cada serviço
   `verificar:` `dotnet test` compila e roda
-- [ ] **5.2** Testes unitários das regras: validação de chave PIX, validação do formato do correlationId, decisão de aprovação
+  ✔ 4 projetos; `public partial class Program;` nos 3 serviços
+  🔧 **buraco fechado:** as pastas eram planas. Reorganizadas para espelhar os slices (`Features/Pagamentos/CriarPagamento/…`), com namespaces acompanhando. Testes transversais (telemetria, correlação, resiliência) ficam na raiz de propósito — não pertencem a um slice
+- [x] **5.2** Testes unitários das regras: validação de chave PIX, validação do formato do correlationId, decisão de aprovação
   `verificar:` `dotnet test` verde
-- [ ] **5.3** Testes de integração por slice, com clientes downstream substituídos por stub
+  ✔ `ChavePixTests` (15) e `CorrelationIdTests` (16)
+  🔧 **buraco fechado:** a decisão de aprovação só existia via HTTP. Adicionado `FornecedorSimuladoTests` (16 casos) direto no simulador, incluindo a ordem das regras — 999,98 e 999,99 são menores que 1000, então avaliar o limite de saldo primeiro engoliria os dois gatilhos. `InternalsVisibleTo` em vez de tornar o tipo público
+- [x] **5.3** Testes de integração por slice, com clientes downstream substituídos por stub
   `verificar:` nenhum teste depende de outro serviço no ar
-- [ ] **5.4** Teste de telemetria: **todos** os spans carregam `correlation.id` (`OnlyContain`, não `First`)
-  `verificar:` o teste falha se o `CorrelationIdSpanProcessor` for removido — confirmar removendo temporariamente
-- [ ] **5.5** Teste de telemetria: todo `LogRecord` carrega `CorrelationId`
+  ✔ cada projeto sobe seu downstream falso em Kestrel real, resolvido pelo service discovery de produção
+- [x] **5.4** Teste de telemetria: **todos** os spans carregam `correlation.id`
+  `verificar:` o teste falha se o `CorrelationIdSpanProcessor` for removido
+  ✔ mutação confirmada: remover o processor derruba `Todo_span_carrega_o_correlation_id` e `Span_de_negocio_e_span_de_saida…`
+- [x] **5.5** Teste de telemetria: todo `LogRecord` carrega `CorrelationId`
   `verificar:` o teste falha se `IncludeScopes` for desligado — confirmar
-- [ ] **5.6** Teste de propagação outbound: `X-Correlation-Id`, `traceparent` e `baggage` na request de saída
+  🔧 **buraco fechado:** desligar `IncludeScopes` no `ServiceDefaults` **não quebrava nada**. Todos os projetos de teste montavam o próprio logging e sobrescreviam o valor — ninguém protegia o `true` que os três serviços usam em produção. Adicionado `ServiceDefaults_habilita_IncludeScopes`, onde `AddServiceDefaults` é a única fonte de configuração
+  ✔ duas mutações agora detectadas: desligar `IncludeScopes` e esvaziar o escopo do middleware
+- [x] **5.6** Teste de propagação outbound: `X-Correlation-Id`, `traceparent` e `baggage` na request de saída
   `verificar:` teste verde com a request capturada
-- [ ] **5.7** Teste de continuidade de trace: `TraceId` do span server é igual ao do activity iniciado no teste
+  ✔ contra servidor Kestrel real; capturar por primary handler falso não serve (Fase 1)
+- [x] **5.7** Teste de continuidade de trace
   `verificar:` o teste falha se o cliente for trocado por `new HttpClient()` — confirmar
-- [ ] **5.8** Testes dos cenários de falha, incluindo a distinção entre `Unset` (recusa) e `Error` (falha)
+  ✔ adicionados 3 testes de continuidade de **entrada**: `traceparent` recebido é continuado, alcança os spans filhos, e sem ele o serviço inicia trace próprio
+  ⚠ **honestidade sobre o que cada teste prova:** a mutação para `new HttpClient()` derruba **só** `Chamada_de_saida_leva_o_header_de_correlacao`. `traceparent` e `baggage` continuam sendo injetados, porque o `DiagnosticsHandler` faz parte do `SocketsHttpHandler` mesmo num `HttpClient` cru. E zerar o propagador do OTel quebra só a saída — a continuidade de **entrada** é feita pela camada de hosting do ASP.NET Core, não pelo OTel. Os testes de entrada valem (quebram se a instrumentação sumir), mas não provam código nosso
+- [x] **5.8** Testes dos cenários de falha, incluindo a distinção entre `Unset` (recusa) e `Error` (falha)
   `verificar:` `dotnet test` verde nos 6 cenários
+  ✔ os 6 cenários cobertos no Proxy, Core e BFF, com a distinção `Unset`/`Error` asserida em cada camada
+
+### Contagem por projeto
+
+| Projeto | Testes |
+|---|---|
+| `Shared.Observability.Tests` | 33 |
+| `Pagamentos.Proxy.Tests` | 36 |
+| `Pagamentos.Core.Tests` | 34 |
+| `Pagamentos.Bff.Tests` | 20 |
+
+### Duas armadilhas novas do harness de mutação
+
+Além da já registrada (mutação que não compila), apareceram:
+
+- **Mutação que não se aplica.** Um regex que não casa deixa o arquivo intacto e o resultado lê-se como "nenhum teste pegou". O harness passou a comparar hash do arquivo antes e depois.
+- **Mutação que muda texto sem mudar comportamento.** Uma chamada no-op passa pelas duas checagens acima e não prova nada. Antes de rodar, é preciso saber dizer qual teste *deveria* quebrar.
+
+Ambas registradas na skill `telemetry-testing`.
 
 ## Fase 6 — Validação E2E
 
