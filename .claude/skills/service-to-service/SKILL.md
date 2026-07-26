@@ -56,10 +56,29 @@ That is the whole registration. Two things it relies on, both already handled:
 
 Each retry attempt produces its own client span under the same trace, which is exactly what you want when investigating: three spans to the Proxy makes the retry visible instead of appearing as one slow call.
 
-Two constraints:
+Three constraints:
 
 - The client `Timeout` must be larger than the total resilience budget, otherwise the outer timeout cancels the pipeline mid-retry and you get a confusing `TaskCanceledException` instead of the real downstream error.
 - Only idempotent operations should retry. `POST /pagamentos` creating a payment is not idempotent — either restrict retries to timeouts and connection failures, or carry an idempotency key. Retrying a 500 on a payment that already succeeded duplicates it.
+- **Retry at one layer only — the innermost.** Nested retries multiply: BFF retrying the Core while the Core retries the Proxy is 3 × 3 attempts plus compounding backoff, which blows past the outer `TotalRequestTimeout` and turns a clean `502 fornecedor_indisponivel` into a `500` with a stack trace. This actually happened here and only showed up under the AppHost — a fake downstream that answers instantly never reproduces it.
+
+## Disabling retry on an outer client
+
+Two traps, both silent:
+
+`MaxRetryAttempts = 0` throws at startup — the minimum is 1. Disable through the predicate instead:
+
+```csharp
+options.Retry.ShouldHandle = _ => ValueTask.FromResult(false);
+```
+
+And the options **name** is not the client name. `AddServiceDefaults` adds the handler inside `ConfigureHttpClientDefaults`, i.e. on the default builder whose `Name` is empty, so the options are called `"-standard"` and are shared by every client of that service:
+
+```csharp
+builder.Services.Configure<HttpStandardResilienceOptions>("-standard", options => { ... });
+```
+
+Passing `"IMeuClient-standard"` compiles, runs, and is silently ignored. If a service ever needs different resilience per client, the shared handler has to be split first.
 
 ## Cancellation
 
@@ -67,7 +86,16 @@ Pass `CancellationToken` down every level, from the endpoint parameter into the 
 
 ## Mapping downstream failures upward
 
-Never let a downstream `HttpRequestException` bubble out raw — the caller gets a 500 with no reason and the span carries no business meaning.
+Never let a downstream exception bubble out raw — the caller gets a 500 with no reason and the span carries no business meaning.
+
+`HttpRequestException` and `TaskCanceledException` are not enough. The resilience pipeline throws **Polly** types that derive from neither:
+
+| Exception | Meaning | Map to |
+|---|---|---|
+| `Polly.Timeout.TimeoutRejectedException` | total/attempt timeout exhausted | `504`, `*_timeout` |
+| `Polly.CircuitBreaker.BrokenCircuitException` | circuit open | `502`, `*_indisponivel` |
+
+Miss these and the request returns `500` with a Polly stack trace in the body — the reason that survived three services is lost in the last metre.
 
 | Downstream result | What the caller returns | Log level |
 |---|---|---|
