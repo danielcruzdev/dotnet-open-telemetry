@@ -5,7 +5,7 @@ Divisão do projeto em tarefas verificáveis. Referência: [PRD.md](PRD.md).
 **Regra:** uma tarefa só é marcada `[x]` quando a linha `verificar:` foi executada e passou. Build quebrado, teste falhando ou verificação pulada = tarefa não concluída. O agent `spec-keeper` mantém este arquivo.
 
 **Iniciado em:** 2026-07-26
-**Status atual:** Fases 0 a 5 concluídas. Fase 6 parcial: auditoria de código sem achados, leitura do dashboard pendente do usuário. 123 testes verdes.
+**Status atual:** Fases 0 a 6 concluídas e verificadas em 2026-07-26. 123 testes verdes. 9 dos 10 critérios de aceite do PRD confirmados — o décimo é a Fase 7 (README). Próxima: Fase 7.
 
 ---
 
@@ -349,24 +349,50 @@ Agent: `observability-reviewer` · Skill: `run-stack`
 
 Aqui os critérios de aceite do PRD são verificados de verdade, no dashboard.
 
-**Parcialmente concluída em 2026-07-26.** A parte de código está fechada; a leitura visual do dashboard depende de login interativo no browser e ficou pendente do usuário.
+**Concluída em 2026-07-26.** O dashboard foi lido via automação de browser, depois que o usuário instalou a extensão do Chrome.
 
-- [ ] **6.1** Trace único atravessando os 3 serviços, com 6 spans, para um pagamento bem-sucedido
+- [x] **6.1** Trace único atravessando os 3 serviços, para um pagamento bem-sucedido
   `verificar:` filtrar por `correlation.id` no dashboard e descrever a árvore observada
-  ⏳ **pendente do usuário.** Cenário já disparado com `correlation.id = fase6-sucesso`. O que já está provado por outro caminho: o export OTLP funciona (Fase 0.6 — 3 conexões Established, zero erro de export) e a árvore de spans é asserida em teste. Falta confirmar a renderização
-- [ ] **6.2** Os 6 cenários da seção 4 do PRD reproduzidos, cada um mostrando no dashboard qual serviço falhou e o `erro.motivo`
+  ✔ trace `92dd556` — **Recursos 3 · Profundidade 6 · Intervalos totais 7**:
+  ```
+  POST /pagamentos                      pagamentos-bff    0,68s
+  └─ HTTP POST 200                      pagamentos-bff    0,46s
+     └─ POST /pagamentos                pagamentos-core   0,40s
+        ├─ ValidarChavePix              pagamentos-core   2,44ms
+        └─ HTTP POST 200                pagamentos-core   0,14s
+           └─ POST /fornecedor/pagamentos  pagamentos-proxy  97,91ms
+              └─ ChamarFornecedor          pagamentos-proxy   1,51ms
+  ```
+  ✔ o span **mais profundo** (`ChamarFornecedor`, no Proxy) carrega `correlation.id = fase6-sucesso`, além de `fornecedor.nome = banco-parceiro` e `Source = Pagamentos.Proxy`. O id enviado ao BFF chegou dois hops abaixo, em outro serviço
+  ℹ **7 spans, não 6.** O PRD (§5.3) enumera 6 porque foi escrito antes da tarefa 3.4, que acrescentou o span de negócio `ValidarChavePix`. PRD corrigido
+- [x] **6.2** Os 6 cenários da seção 4 do PRD reproduzidos, cada um mostrando no dashboard qual serviço falhou e o `erro.motivo`
   `verificar:` percorrer um a um e registrar o resultado
-  ✔ **reprodutibilidade confirmada** — os 6 rodaram com ids próprios (tabela abaixo)
-  ⏳ **pendente do usuário:** a leitura do `erro.motivo` no dashboard
-- [ ] **6.3** Logs dos 3 serviços correlacionados em uma linha do tempo por `CorrelationId`
+  ✔ os 6 traces presentes, com a composição por serviço visível na lista:
+
+  | Trace | Cenário | Spans por serviço | Duração |
+  |---|---|---|---|
+  | `92dd556` | sucesso | bff 2 · core 3 · proxy 2 | 0,68s |
+  | `feb9d26` | saldo | bff 2 · core 3 · proxy 2 | 27,86ms |
+  | `cade876` | chave inválida | bff 2 · core 2 · **proxy 0** | 5,11ms |
+  | `f42b19c` | timeout | bff 2 · core 6 · proxy 8 | 10,18s |
+  | `c25db70` | indisponível | bff 2 · core 6 · proxy 8 | 8,66s |
+  | `8dfb6d6` | latência | bff 2 · core 3 · proxy 2 | 3,02s |
+
+  ✔ **`cade876` não tem nenhum span do Proxy** — a validação de chave para no Core, confirmado visualmente
+  ✔ **retry visível como spans irmãos**: `c25db70` mostra 4 tentativas (`HTTP POST 502` → Proxy → `ChamarFornecedor`), espalhadas por 8,66s pelo backoff. O BFF tem **um único** span de cliente, confirmando a correção da Fase 4
+  ✔ **semântica de erro confirmada no dashboard:** em `feb9d26` (saldo) os spans de **servidor** dos 3 serviços estão limpos; em `c25db70` (indisponível) estão marcados como erro. O span de servidor do Proxy no caso de saldo traz `erro.motivo = saldo_insuficiente` e `pagamento.status = recusado` **sem** status de erro
+  ℹ spans de **cliente** com 422 aparecem como erro — comportamento padrão do OTel (para cliente, 4xx é falha da chamada; para servidor, não). Não é defeito nosso
+- [x] **6.3** Logs dos 3 serviços correlacionados em uma linha do tempo por `CorrelationId`
   `verificar:` filtrar nos structured logs do dashboard
-  ⏳ **pendente do usuário.** Que todo log de aplicação carrega o `CorrelationId` está fixado em teste nos 4 projetos; falta ver os três serviços numa linha do tempo só
+  ✔ filtrando por `traceId = c25db70…`: **34 logs** (de 139 no total), com os três serviços na mesma linha do tempo
+  ✔ um log do Proxy inspecionado traz `CorrelationId = fase6-indisp`, `TraceId`, `SpanId`, e `Motivo = fornecedor_indisponivel` como **campo estruturado** — não interpolado na mensagem
+  ✔ os 8 logs do Proxy mostram as 4 tentativas de retry, cada uma com log de entrada (`Information`) e de falha (`Error`)
 - [x] **6.4** Auditoria do `observability-reviewer`: PII, cardinalidade de métrica, semântica de erro, `new HttpClient` residual
   `verificar:` relatório sem achado de severidade alta
   ✔ **sem achados.** `new HttpClient(` em `src/`: zero. URL com porta ou `localhost` em `src/`: zero. `AddCorrelation` uma vez por serviço. Tags de span: `erro.motivo`, `fornecedor.nome`, `fornecedor.resultado`, `pagamento.id`, `pagamento.status`, `pix.chave.tipo`, `pix.chave.valida` — nenhuma carrega valor identificável. Tags de métrica: só `status` (3 valores) e `resultado` (4 valores). `SetStatus(Error)` aparece **só** nos três métodos de falha de infraestrutura, nunca em recusa de negócio. Nenhum log com interpolação nem com a chave crua
-- [ ] **6.5** Conferir os 10 critérios de aceite do PRD, um a um
+- [x] **6.5** Conferir os 10 critérios de aceite do PRD, um a um
   `verificar:` todos passam; qualquer falha volta como tarefa nova nesta fase
-  Ver tabela abaixo: **5 confirmados**, 4 dependem do dashboard, 1 é da Fase 7
+  ✔ **9 de 10 confirmados.** O décimo (README) é a Fase 7
 
 ### Cenários disparados (2026-07-26), prontos para busca no dashboard
 
@@ -386,10 +412,10 @@ Aqui os critérios de aceite do PRD são verificados de verdade, no dashboard.
 |---|---|---|
 | 1 | AppHost sobe os 3 saudáveis | ✔ confirmado |
 | 2 | `POST` sem header devolve o header preenchido | ✔ confirmado |
-| 3 | id enviado preservado em cada hop e em todos os spans | ◐ header confirmado E2E; atributo de span confirmado em teste por serviço — falta ver os 3 num trace só |
-| 4 | filtrar por `correlation.id` traz um trace atravessando os 3 | ⏳ dashboard |
-| 5 | todo log tem `CorrelationId`, `TraceId`, `SpanId` | ◐ fixado em teste; falta a visão combinada |
-| 6 | os 6 cenários reproduzíveis, com o serviço culpado visível | ◐ reprodutibilidade ✔; leitura no dashboard ⏳ |
+| 3 | id enviado preservado em cada hop e em todos os spans | ✔ `correlation.id = fase6-sucesso` no span mais profundo do Proxy |
+| 4 | filtrar por `correlation.id` traz um trace atravessando os 3 | ✔ trace `92dd556`: Recursos 3, 7 spans |
+| 5 | todo log tem `CorrelationId`, `TraceId`, `SpanId` | ✔ os 3 confirmados num log do Proxy no dashboard |
+| 6 | os 6 cenários reproduzíveis, com o serviço culpado visível | ✔ os 6 traces lidos; `cade876` sem span do Proxy |
 | 7 | motivo do Proxy chega íntegro ao BFF | ✔ confirmado E2E |
 | 8 | suíte cobre id recebido/ausente/inválido, spans, logs e headers | ✔ 123 testes |
 | 9 | nenhum dado sensível em span ou log | ✔ auditoria 6.4 + testes dedicados |

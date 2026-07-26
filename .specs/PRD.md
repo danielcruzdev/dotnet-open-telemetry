@@ -164,7 +164,9 @@ O passo 6 é redundante com o Baggage de propósito: o header explícito em cada
 
 Instrumentação automática de ASP.NET Core e HttpClient nos três serviços. Spans manuais apenas para operações de negócio que valem medição própria. Falhas registram `AddException` **e** `SetStatus`.
 
-Um trace saudável de um pagamento tem 6 spans: server e client no BFF, server e client no Core, server no Proxy, e o span da chamada simulada ao parceiro.
+Um trace saudável de um pagamento tem **7 spans**: server e client no BFF, server, `ValidarChavePix` e client no Core, server no Proxy, e `ChamarFornecedor` na chamada simulada ao parceiro.
+
+> Esta contagem dizia 6 até 2026-07-26. O span de negócio `ValidarChavePix` foi acrescentado pela tarefa 3.4, depois que o PRD foi escrito. Confirmado no dashboard na Fase 6: Recursos 3, Profundidade 6, Intervalos totais 7.
 
 ### 5.4 Logs
 
