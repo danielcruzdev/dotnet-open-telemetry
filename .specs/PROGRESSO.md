@@ -5,7 +5,7 @@ Divisão do projeto em tarefas verificáveis. Referência: [PRD.md](PRD.md).
 **Regra:** uma tarefa só é marcada `[x]` quando a linha `verificar:` foi executada e passou. Build quebrado, teste falhando ou verificação pulada = tarefa não concluída. O agent `spec-keeper` mantém este arquivo.
 
 **Iniciado em:** 2026-07-26
-**Status atual:** Fases 0 e 1 concluídas e verificadas em 2026-07-26. 29 testes verdes. Próxima: Fase 2 (Proxy)
+**Status atual:** Fases 0, 1 e 2 concluídas e verificadas em 2026-07-26. 46 testes verdes. Próxima: Fase 3 (Core)
 
 ---
 
@@ -105,16 +105,62 @@ A implementação contradisse o que estava escrito. Corrigido em `correlation-id
 
 Agents: `slice-builder`, `otel-instrumentation` · Skills: `vertical-slice`, `structured-logging`
 
-- [ ] **2.1** Slice `Features/Fornecedor/ProcessarPagamento/` — recebe do Core e chama o parceiro simulado
+Concluída em 2026-07-26 · **17 testes** em `tests/Pagamentos.Proxy.Tests`
+
+- [x] **2.1** Slice `Features/Fornecedor/ProcessarPagamento/` — recebe do Core e chama o parceiro simulado
   `verificar:` `POST` direto no Proxy retorna aprovação para valor < 1000
-- [ ] **2.2** Simulador do parceiro externo, com span próprio nomeado `ChamarFornecedor` e atributo `fornecedor.nome`
+  ✔ `POST /fornecedor/pagamentos` → `200 aprovado` com `pagamentoId` e `autorizacao`
+- [x] **2.2** Simulador do parceiro externo, com span próprio nomeado `ChamarFornecedor` e atributo `fornecedor.nome`
   `verificar:` o trace do Proxy mostra o span do parceiro aninhado no span do servidor
-- [ ] **2.3** Injeção determinística de falhas conforme a tabela da seção 4 do PRD (999.99 timeout, 999.98 indisponível, 999.97 lento, >= 1000 saldo insuficiente)
+  ✔ `ParentSpanId` do span do fornecedor == `SpanId` do span do servidor, mesmo `TraceId`; `fornecedor.nome = banco-parceiro`
+- [x] **2.3** Injeção determinística de falhas conforme a tabela da seção 4 do PRD (999.99 timeout, 999.98 indisponível, 999.97 lento, >= 1000 saldo insuficiente)
   `verificar:` os 4 gatilhos reproduzem o desfecho esperado, repetidamente
-- [ ] **2.4** Semântica de erro: `502`/`504` marcam o span como `Error` com `erro.motivo`; `422` de saldo deixa o span `Unset`
+  ✔ os 5 cenários confirmados sob o AppHost, e o gatilho 999.98 repetido 3× com o mesmo desfecho
+- [x] **2.4** Semântica de erro: `502`/`504` marcam o span como `Error` com `erro.motivo`; `422` de saldo deixa o span `Unset`
   `verificar:` no dashboard, o cenário de saldo insuficiente **não** aparece como erro; o de indisponibilidade aparece
-- [ ] **2.5** Métrica `fornecedor.chamadas` com tag `resultado`
+  ✔ recusa deixa o span `Unset`; falha de infra marca `Error` + `StatusDescription`
+  ⚠ **descoberta:** asserir só `Status == Error` não prova nada — a instrumentação do ASP.NET Core já marca todo 5xx como erro sozinha. O teste passava mesmo sem o nosso `SetStatus`. Passou a asserir `StatusDescription`, que só o nosso código define
+- [x] **2.5** Métrica `fornecedor.chamadas` com tag `resultado`
   `verificar:` a métrica aparece no dashboard com valores distintos por resultado
+  ✔ separada por `Aprovado` e `SaldoInsuficiente`; a mutação para tag de alta cardinalidade é detectada pelo teste
+
+### Contrato do Proxy
+
+`POST /fornecedor/pagamentos` · `{ chavePix, valor, descricao }`
+
+| HTTP | Corpo |
+|---|---|
+| 200 | `{ pagamentoId, status: "aprovado", autorizacao }` |
+| 422 / 502 / 504 | `{ status, motivo, detalhe }` |
+
+Toda resposta não-200 usa a **mesma forma**, para o Core ter só um formato a entender e o motivo atravessar os hops sem virar erro genérico.
+
+### Cenários verificados sob o AppHost
+
+| Cenário | valor | HTTP | motivo | ms |
+|---|---|---|---|---|
+| sucesso | 150 | 200 | — | 52 |
+| saldo insuficiente | 1000 | 422 | `saldo_insuficiente` | 8 |
+| timeout do parceiro | 999,99 | 504 | `fornecedor_timeout` | 7 |
+| parceiro indisponível | 999,98 | 502 | `fornecedor_indisponivel` | 8 |
+| latência alta | 999,97 | 200 | — | 3014 |
+
+`X-Correlation-Id: e2e-fase2` preservado em todas.
+
+### Teste de mutação
+
+| Removido / alterado | Falhou |
+|---|---|
+| recusa de saldo passa a marcar `Error` | `Recusa_de_saldo_nao_marca_o_span...` |
+| `SetStatus` da falha de infra | `Falha_de_infraestrutura...` (só após reforçar a asserção) |
+| tag `fornecedor.nome` | `Span_do_fornecedor_identifica_o_parceiro` |
+| métrica com tag de alta cardinalidade | `Metrica_de_chamadas_separa_por_resultado` |
+
+### Decisões
+
+- A latência do cenário 999,97 vem de `Fornecedor:LatenciaAlta` (default 3s). Os testes reduzem para 50 ms — sem isso a suíte pagaria 3s por execução. Confirmado que o default vale em produção: 3014 ms sob o AppHost.
+- `[assembly: CollectionBehavior(DisableTestParallelization = true)]` no projeto de teste. A instrumentação do ASP.NET Core é do processo inteiro, então classes de teste em paralelo derrubam spans umas no exporter das outras.
+- `public partial class Program;` adicionado ao Proxy agora (a tarefa 5.1 previa isso para depois) porque o `WebApplicationFactory` já precisa dele.
 
 ## Fase 3 — Core
 
