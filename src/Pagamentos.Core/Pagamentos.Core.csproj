@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pagamentos.ServiceDefaults\Pagamentos.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+</Project>

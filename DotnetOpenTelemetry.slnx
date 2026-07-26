@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Pagamentos.AppHost/Pagamentos.AppHost.csproj" />
+    <Project Path="src/Pagamentos.Bff/Pagamentos.Bff.csproj" />
+    <Project Path="src/Pagamentos.Core/Pagamentos.Core.csproj" />
+    <Project Path="src/Pagamentos.Proxy/Pagamentos.Proxy.csproj" />
+    <Project Path="src/Pagamentos.ServiceDefaults/Pagamentos.ServiceDefaults.csproj" />
+  </Folder>
+</Solution>

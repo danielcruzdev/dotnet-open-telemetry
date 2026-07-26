@@ -1,0 +1,46 @@
+# Saida de build — 324 dos 366 arquivos do repo hoje
+[Bb]in/
+[Oo]bj/
+artifacts/
+[Pp]ublish/
+*.nupkg
+
+# Resultados de teste
+[Tt]est[Rr]esults/
+*.trx
+*.coverage
+coverage*.json
+coverage*.xml
+
+# Arquivos de usuario / IDE — pessoais, nao do projeto
+.vs/
+.idea/
+*.user
+*.suo
+*.DotSettings.user
+*.csproj.user
+
+# Claude Code: agents e skills sao do time e VAO para o repo.
+# Apenas as permissoes locais de cada pessoa ficam de fora.
+.claude/settings.local.json
+
+# Segredos e config local — nunca versionar
+appsettings.*.local.json
+appsettings.Local.json
+*.env
+.env.*
+secrets.json
+
+# Diagnostico do OpenTelemetry (ver skill run-stack).
+# Gerado ao lado do binario e enche 1 MB de ruido.
+OTEL_DIAGNOSTICS.json
+*.exe.*.log
+
+# Logs soltos e despejos
+*.log
+msbuild.binlog
+*.dmp
+
+# SO
+Thumbs.db
+.DS_Store
