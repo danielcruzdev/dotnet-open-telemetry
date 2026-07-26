@@ -5,7 +5,7 @@ Divisão do projeto em tarefas verificáveis. Referência: [PRD.md](PRD.md).
 **Regra:** uma tarefa só é marcada `[x]` quando a linha `verificar:` foi executada e passou. Build quebrado, teste falhando ou verificação pulada = tarefa não concluída. O agent `spec-keeper` mantém este arquivo.
 
 **Iniciado em:** 2026-07-26
-**Status atual:** Fases 0 a 6 concluídas e verificadas em 2026-07-26. 123 testes verdes. 9 dos 10 critérios de aceite do PRD confirmados — o décimo é a Fase 7 (README). Próxima: Fase 7.
+**Status atual:** PROJETO CONCLUÍDO em 2026-07-26. Fases 0 a 7 fechadas, 123 testes verdes, os 10 critérios de aceite do PRD confirmados.
 
 ---
 
@@ -419,18 +419,40 @@ Aqui os critérios de aceite do PRD são verificados de verdade, no dashboard.
 | 7 | motivo do Proxy chega íntegro ao BFF | ✔ confirmado E2E |
 | 8 | suíte cobre id recebido/ausente/inválido, spans, logs e headers | ✔ 123 testes |
 | 9 | nenhum dado sensível em span ou log | ✔ auditoria 6.4 + testes dedicados |
-| 10 | README com o passo a passo de investigação | ✗ Fase 7 |
+| 10 | README com o passo a passo de investigação | ✔ 6 passos, do id em maos ate a reproducao |
 
 ## Fase 7 — Documentação
 
 Agent: `spec-keeper`
 
-- [ ] **7.1** `README.md`: o que é, como rodar, arquitetura, e o passo a passo de investigar um problema pelo `correlationId`
+Concluída em 2026-07-26.
+
+- [x] **7.1** `README.md`: o que é, como rodar, arquitetura, e o passo a passo de investigar um problema pelo `correlationId`
   `verificar:` alguém que não conhece o projeto sobe a stack e acha um trace seguindo só o README
-- [ ] **7.2** Registrar no PRD as decisões que mudaram durante a implementação
+  ✔ o roteiro de investigação tem 6 passos, do id em mãos até a reprodução. Inclui a tabela de leitura rápida (composição de spans por serviço → onde parou), a distinção recusa × falha, os gatilhos determinísticos e os dois limites conhecidos (logs do Hosting sem id; spans de cliente com 422 marcados como erro pelo padrão do OTel)
+  ⚠ **não verificado literalmente:** não houve alguém sem conhecimento prévio para seguir o README. O que dá para afirmar é que cada passo descrito foi executado e observado na Fase 6
+- [x] **7.2** Registrar no PRD as decisões que mudaram durante a implementação
   `verificar:` PRD e código não divergem
-- [ ] **7.3** Fechar este arquivo com o status final e as tarefas descobertas ao longo do caminho
+  ✔ nova seção 9 com 6 decisões: handlers globais, motivo próprio por hop, retry só na camada interna, `POST` retentado apesar de não idempotente (limite aceito), Core sem estado, latência configurável. A contagem de spans (§5.3) foi corrigida de 6 para 7 na Fase 6. A tabela de riscos deixou de afirmar que o retry duplicado está mitigado — não está
+- [x] **7.3** Fechar este arquivo com o status final e as tarefas descobertas ao longo do caminho
   `verificar:` nenhuma tarefa marcada sem evidência de verificação
+  ✔ todas as tarefas fechadas trazem a evidência ao lado. As que não puderam ser verificadas estão marcadas com ⚠ em vez de fechadas em silêncio
+
+### Escopo acrescentado pelo usuário: outros backends
+
+`docs/backends.md`, com Dynatrace e Datadog.
+
+A conclusão que importa: **trocar de backend não exige mudança de código**, porque `ServiceDefaults` só liga o exportador quando `OTEL_EXPORTER_OTLP_ENDPOINT` existe, e `UseOtlpExporter()` respeita as variáveis padrão do OTel.
+
+Verificado empiricamente antes de documentar — Proxy rodando com endpoint e protocolo trocados por variável de ambiente, contra um listener HTTP local:
+
+```
+PATH=/v1/traces   TYPE=application/x-protobuf
+PATH=/v1/logs     TYPE=application/x-protobuf
+HEADERS=Authorization=Api-Token dt0c01.FAKE | x-teste=valor
+```
+
+⚠ **A armadilha registrada:** o default do exportador .NET é gRPC, e **nem o Dynatrace nem o endpoint direto do Datadog aceitam gRPC**. Sem `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` a telemetria some em silêncio — os serviços sobem, `/health` responde, e nada chega. É o mesmo modo de falha do certificado na Fase 0.6.
 
 ---
 

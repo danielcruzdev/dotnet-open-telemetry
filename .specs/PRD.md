@@ -224,4 +224,30 @@ O critério 3 é o coração: se ele falhar, o projeto não cumpriu seu propósi
 | Um passo implementado em 2 de 3 serviços | O contrato vive em `Shared.Observability`, aplicado por uma única extensão |
 | Substituir o propagador default e perder o Baggage | Documentado nas skills `correlation-id` e `otel-conventions` |
 | PII vazando em atributo de span | Revisão pelo agent `observability-reviewer` antes de cada merge |
-| Retry duplicando pagamento | Retry restrito a timeout e falha de conexão; `POST` não é idempotente |
+| Retry duplicando pagamento | **Não mitigado.** Ver decisão 4 abaixo |
+
+## 9. Decisões tomadas na implementação
+
+Registradas aqui porque divergem do que este documento presumia, ou porque não estavam previstas.
+
+**1. Handlers de correlação e resiliência são globais, não por cliente.**
+`AddCorrelation` e `AddServiceDefaults` os aplicam via `ConfigureHttpClientDefaults`, cobrindo todo `HttpClient`. Registrar por cliente — como as tarefas 3.1 e 4.1 do PROGRESSO diziam — passaria a duplicar o handler no pipeline. Esquecer o registro em um único cliente quebraria a correlação naquele hop e em nenhum outro, o que é caro de achar.
+
+**2. Falha de transporte tem motivo próprio.**
+`proxy_indisponivel`/`proxy_timeout` (Core→Proxy) e `core_indisponivel`/`core_timeout` (BFF→Core) são distintos dos `fornecedor_*` que o Proxy respondeu. Localizar **qual hop** caiu é o objetivo do projeto; um motivo único para os dois casos apagaria a diferença.
+
+**3. Retry acontece em uma camada só, a mais interna.**
+O Core retenta o Proxy; o BFF **não** retenta o Core. Retries aninhados multiplicam tentativas e backoff (3 × 3) até estourar o timeout total — foi assim que timeout e indisponibilidade viraram `500` após 30s durante a Fase 4, em vez do motivo correto.
+
+**4. O `POST` é retentado mesmo não sendo idempotente.**
+A seção 4 exige "502 após retries" e a visibilidade das tentativas como spans irmãos. Num sistema real isso exigiria chave de idempotência. **Limite conhecido e aceito neste projeto de referência**, não um descuido.
+
+**5. O Core não guarda estado.**
+Quem emite o `pagamentoId` é o fornecedor, então a consulta atravessa a cadeia até ele. Duplicar o razão no Core criaria duas versões da verdade sobre o mesmo pagamento.
+
+**6. A latência do cenário 999,97 é configurável.**
+`Fornecedor:LatenciaAlta`, com default de 3s. Os testes reduzem para 50 ms; sem isso a suíte pagaria 3s por execução.
+
+## 10. Trocar de backend
+
+Nada do contrato é específico do Aspire Dashboard — são atributos OTLP comuns. Apontar para Dynatrace, Datadog ou um Collector é só variável de ambiente, sem mudança de código. Guia em [`docs/backends.md`](../docs/backends.md).
