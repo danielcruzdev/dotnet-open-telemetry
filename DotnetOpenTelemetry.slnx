@@ -5,5 +5,9 @@
     <Project Path="src/Pagamentos.Core/Pagamentos.Core.csproj" />
     <Project Path="src/Pagamentos.Proxy/Pagamentos.Proxy.csproj" />
     <Project Path="src/Pagamentos.ServiceDefaults/Pagamentos.ServiceDefaults.csproj" />
+    <Project Path="src/Shared.Observability/Shared.Observability.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Shared.Observability.Tests/Shared.Observability.Tests.csproj" />
   </Folder>
 </Solution>
