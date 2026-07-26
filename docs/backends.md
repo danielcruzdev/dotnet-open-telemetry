@@ -21,7 +21,9 @@ O default do exportador .NET é **gRPC**, e é o que o Aspire Dashboard usa. Mas
 | Destino | gRPC? |
 |---|---|
 | Aspire Dashboard | ✅ (default) |
-| Dynatrace | ❌ — só HTTP com protobuf **binário** (JSON também não) |
+| Dynatrace **OTLP direto** | ❌ — só HTTP com protobuf **binário** (JSON também não) |
+| Dynatrace **endpoint local do OneAgent** | ❌ — `http/protobuf`, e só traces |
+| Dynatrace **Span Sensor do OneAgent** | — não usa OTLP; ver [seção do OneAgent](#e-o-oneagent-serve--com-uma-ressalva) |
 | Datadog via **Agent** | ✅ |
 | Datadog **ingestão direta** | ❌ — só `http/protobuf` |
 | OTel Collector | ✅ |
@@ -150,6 +152,98 @@ fetch logs
 ```
 
 O Dynatrace liga log↔trace sozinho pelo `TraceId`/`SpanId` que já vão nos logs.
+
+---
+
+## E o OneAgent? Serve — com uma ressalva
+
+Se você **já roda OneAgent**, sim: ele é o caminho mais simples, e evita a armadilha do protocolo por completo. Mas há um detalhe que decide o desenho neste projeto.
+
+| Caminho | Traces | Logs | Métricas | Token? | Container? |
+|---|---|---|---|---|---|
+| **Span Sensor do OneAgent** | ✅ inclui os customizados | via módulo de log | ✅ do host | não | ✅ |
+| **Endpoint OTLP local** (`:14499`) | ✅ | ❌ | ❌ | não | ❌ use ActiveGate |
+| **OTLP direto** (seções acima) | ✅ | ✅ | ✅ | sim | ✅ |
+
+### Opção 1 — Span Sensor (o que você provavelmente quer)
+
+O OneAgent instrumenta o .NET sozinho **e** captura os spans criados por `ActivitySource` — inclusive os nossos, `ValidarChavePix` e `ChamarFornecedor`. Não precisa de endpoint, nem token, nem protocolo: `OTEL_EXPORTER_OTLP_ENDPOINT` fica vazio e o `ServiceDefaults` simplesmente não liga exportador nenhum.
+
+Três coisas que valem saber antes:
+
+**Não vem ligado.** É opt-in. Em *Settings → Collect and capture → General monitoring settings → OneAgent features*, habilite **"OpenTelemetry (.NET) [Opt-In]"**. Sem isso, seus spans de negócio não aparecem — e nada avisa.
+
+**Os atributos vêm junto, todos.** O sensor captura automaticamente todos os atributos OpenTelemetry, então `correlation.id`, `erro.motivo`, `pagamento.status` e `fornecedor.nome` chegam sem configuração. (Há allowlist/blocklist se você precisar bloquear algum por privacidade — relevante caso alguém acrescente um atributo sensível no futuro.)
+
+**Ele ignora as fontes que já instrumenta.** `System.Net.*`, `Microsoft.AspNet*` e afins são descartados de propósito, para não duplicar o que o próprio OneAgent já rastreia. Ou seja: nosso `AddAspNetCoreInstrumentation()` e `AddHttpClientInstrumentation()` não geram spans duplicados — mas quem produz esses spans passa a ser o OneAgent, não o SDK.
+
+Uma diferença de comportamento que aparece em investigação: **o OneAgent ingere o span quando ele é criado**, não quando termina. O exportador OTLP só envia no fim. Traces longos aparecem antes de concluir.
+
+### Opção 2 — endpoint OTLP local do OneAgent
+
+O OneAgent expõe um endpoint local que dispensa token, porque só aceita conexão de `127.0.0.1`:
+
+```bash
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://localhost:14499/otlp/v1/traces"
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL="http/protobuf"
+```
+
+**A ressalva que decide:** é **só traces**. Não aceita logs nem métricas.
+
+Para este projeto isso é caro — metade do valor aqui é a correlação log↔trace. Usando só este endpoint, você teria traces no Dynatrace e log nenhum. Precisa combinar com o módulo de log do OneAgent (abaixo) ou mandar os logs por OTLP direto.
+
+Requer também habilitar o *Extension Execution Controller* e o *local HTTP Metric, Log and Event Ingest API*, **não funciona em container** (aí é ActiveGate), e a própria Dynatrace recomenda o OTLP direto para a maioria dos casos.
+
+### Logs com OneAgent — atenção ao formatador
+
+O módulo de log do OneAgent lê arquivos e stdout. Nossos logs saem por OTLP, mas o console também está ativo — só que **o formatador padrão não emite escopos**, e é no escopo que vive o `CorrelationId`. Do jeito que está, o OneAgent leria linhas sem o id.
+
+Troque para JSON com escopos:
+
+```json
+// appsettings.json
+{
+  "Logging": {
+    "Console": {
+      "FormatterName": "json",
+      "FormatterOptions": { "IncludeScopes": true }
+    }
+  }
+}
+```
+
+Ou por variável de ambiente:
+
+```bash
+export Logging__Console__FormatterName="json"
+export Logging__Console__FormatterOptions__IncludeScopes="true"
+```
+
+Verificado — o stdout passa a sair assim (encurtado):
+
+```json
+{
+  "LogLevel": "Information",
+  "Category": "Pagamentos.Proxy.Features.Fornecedor.ProcessarPagamento.ProcessarPagamentoRequest",
+  "Message": "Encaminhando pagamento ao fornecedor fornecedor=banco-parceiro valor=999.98",
+  "State": { "Fornecedor": "banco-parceiro", "Valor": 999.98 },
+  "Scopes": [
+    { "SpanId": "f8699c03ea4ed14f", "TraceId": "778d85caeb644b8ed4cfd46f3de0cb0b" },
+    { "CorrelationId": "teste-oneagent" }
+  ]
+}
+```
+
+`CorrelationId`, `TraceId` e `SpanId` presentes — é disso que o OneAgent precisa para ligar log a trace.
+
+### Qual escolher
+
+- **Já tem OneAgent no host** → Span Sensor. Você ganha contexto de host e processo de graça, e não configura OTLP nenhum.
+- **Container, Kubernetes, serverless** → OTLP direto. O endpoint local não existe aí.
+- **Quer os três sinais por um caminho só** → OTLP direto. O endpoint local é traces-only.
+- **Quer manter o Aspire Dashboard em dev** → Collector no meio (mais abaixo).
+
+Os dois podem coexistir: OneAgent cuidando de host, processo e auto-instrumentação, e OTLP direto levando logs e métricas.
 
 ---
 
@@ -388,15 +482,19 @@ Para separar o que testei do que segue a documentação dos fornecedores:
 ✔ **Verificado nesta máquina**
 - Trocar endpoint, protocolo e headers **só por variável de ambiente**, sem alterar código: chegaram `POST /v1/traces` e `/v1/logs` com `application/x-protobuf` e os headers customizados.
 - `WithEnvironment` no AppHost **sobrescreve** a injeção do Aspire: com o Proxy configurado para um listener local, chegaram `/v1/logs` e `/v1/metrics` com `Authorization=Api-Token …` e `application/x-protobuf`.
+- O console em JSON com `IncludeScopes` emite `CorrelationId`, `TraceId` e `SpanId` no stdout — é o que o módulo de log do OneAgent precisa. Com o formatador padrão, não emite.
 
 📄 **Conforme a documentação dos fornecedores, não testado contra conta real**
 - Endpoints, escopos de token e restrição de protocolo do Dynatrace.
+- Comportamento do Span Sensor do OneAgent (opt-in, captura de `ActivitySource` customizados, captura automática de atributos, fontes ignoradas) e as limitações do endpoint local `:14499`.
 - Variáveis do Agent do Datadog, endpoint de ingestão direta e correlação log↔trace.
 
 ## Fontes
 
 - [Dynatrace — OTLP API endpoints](https://docs.dynatrace.com/docs/ingest-from/opentelemetry/otlp-api)
 - [Dynatrace — Export with OTLP](https://docs.dynatrace.com/docs/ingest-from/opentelemetry/getting-started/otlp-export)
+- [Dynatrace — Use OneAgent with OpenTelemetry data](https://docs.dynatrace.com/docs/ingest-from/dynatrace-oneagent/oneagent-and-opentelemetry/oneagent-otel)
+- [Dynatrace — Enable the OpenTelemetry Span Sensor for OneAgent](https://docs.dynatrace.com/docs/ingest-from/dynatrace-oneagent/oneagent-and-opentelemetry/configuration)
 - [Datadog — OTLP Ingestion by the Datadog Agent](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest_in_the_agent/)
 - [Datadog — OTLP Intake Endpoint](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest/)
 - [Datadog — Correlate OpenTelemetry Traces and Logs](https://docs.datadoghq.com/opentelemetry/correlate/logs_and_traces/)
