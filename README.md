@@ -29,6 +29,8 @@ Testes:
 dotnet test        # 123 testes
 ```
 
+> **A suíte não alimenta o dashboard.** Os testes sobem os serviços em memória com exporter `InMemory` — os spans e logs vão para listas que as asserções inspecionam, e morrem com o processo. Nenhum OTLP sai dali, então o painel continua vazio por mais que os 123 passem. Para ver telemetria é preciso tráfego HTTP de verdade contra o AppHost: uma requisição avulsa ([Reproduza](#6-reproduza)) ou carga ([Gerando volume](#gerando-volume)).
+
 ## Arquitetura
 
 ```
