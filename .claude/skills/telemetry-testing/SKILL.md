@@ -152,6 +152,28 @@ Filter them out at the source:
     context => !context.Request.Path.StartsWithSegments("/recebe"))
 ```
 
+The same cause bites across **test classes**: xUnit runs classes in parallel, so a second `WebApplicationFactory` alive at the same time drops its server spans into your exporter and `Single(s => s.Kind == Server)` starts throwing "more than one matching element". Any test project that asserts on spans needs:
+
+```csharp
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
+```
+
+## A span-status assertion can pass for the wrong reason
+
+ASP.NET Core instrumentation already sets `ActivityStatusCode.Error` on **any** 5xx response. So this assertion holds even if your own `SetStatus` is deleted:
+
+```csharp
+Assert.Equal(ActivityStatusCode.Error, span.Status);   // nao prova nada
+```
+
+Assert the description too — that value comes only from your `SetStatus(Error, motivo)`:
+
+```csharp
+Assert.Equal(motivo, span.StatusDescription);
+```
+
+The general rule: before writing a telemetry assertion, name the line of production code whose removal would break it. If you cannot, the framework is doing the work and the test is decorative.
+
 ## Prove the test can fail
 
 A telemetry test that has never been seen failing proves nothing — the whole failure mode here is silence. After it goes green, remove the thing it protects and confirm it goes red:
