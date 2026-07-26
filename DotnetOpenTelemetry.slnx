@@ -8,6 +8,7 @@
     <Project Path="src/Shared.Observability/Shared.Observability.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Pagamentos.Core.Tests/Pagamentos.Core.Tests.csproj" />
     <Project Path="tests/Pagamentos.Proxy.Tests/Pagamentos.Proxy.Tests.csproj" />
     <Project Path="tests/Shared.Observability.Tests/Shared.Observability.Tests.csproj" />
   </Folder>
