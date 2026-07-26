@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
 using OpenTelemetry.Metrics;
+using Pagamentos.Proxy.Tests.Features.Fornecedor.ProcessarPagamento;
 
 namespace Pagamentos.Proxy.Tests;
 

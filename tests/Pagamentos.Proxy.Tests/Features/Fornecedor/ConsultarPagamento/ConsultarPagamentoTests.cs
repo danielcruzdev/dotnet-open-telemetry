@@ -1,7 +1,9 @@
-using System.Net;
 using System.Net.Http.Json;
+using System.Net;
+using Pagamentos.Proxy.Tests.Features.Fornecedor.ProcessarPagamento;
+using Pagamentos.Proxy.Tests;
 
-namespace Pagamentos.Proxy.Tests;
+namespace Pagamentos.Proxy.Tests.Features.Fornecedor.ConsultarPagamento;
 
 /// <summary>
 /// O fornecedor e quem gera o pagamentoId, entao e ele quem responde pela

@@ -1,6 +1,6 @@
 using Pagamentos.Core.Features.Pagamentos;
 
-namespace Pagamentos.Core.Tests;
+namespace Pagamentos.Core.Tests.Features.Pagamentos;
 
 public sealed class ChavePixTests
 {

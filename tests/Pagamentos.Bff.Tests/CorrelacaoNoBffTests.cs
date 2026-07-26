@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
 using OpenTelemetry.Logs;
+using Pagamentos.Bff.Tests.Features.Pagamentos.CriarPagamento;
 using Shared.Observability;
 
 namespace Pagamentos.Bff.Tests;

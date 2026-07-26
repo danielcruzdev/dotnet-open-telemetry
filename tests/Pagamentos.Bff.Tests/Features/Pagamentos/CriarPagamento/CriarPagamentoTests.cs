@@ -1,7 +1,8 @@
-using System.Net;
 using System.Net.Http.Json;
+using System.Net;
+using Pagamentos.Bff.Tests;
 
-namespace Pagamentos.Bff.Tests;
+namespace Pagamentos.Bff.Tests.Features.Pagamentos.CriarPagamento;
 
 public sealed class CriarPagamentoTests
 {

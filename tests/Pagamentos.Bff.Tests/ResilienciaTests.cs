@@ -1,5 +1,6 @@
-using System.Net;
 using System.Net.Http.Json;
+using System.Net;
+using Pagamentos.Bff.Tests.Features.Pagamentos.CriarPagamento;
 
 namespace Pagamentos.Bff.Tests;
 

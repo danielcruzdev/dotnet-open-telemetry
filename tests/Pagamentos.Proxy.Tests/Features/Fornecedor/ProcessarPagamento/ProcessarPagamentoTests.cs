@@ -1,7 +1,8 @@
-using System.Net;
 using System.Net.Http.Json;
+using System.Net;
+using Pagamentos.Proxy.Tests;
 
-namespace Pagamentos.Proxy.Tests;
+namespace Pagamentos.Proxy.Tests.Features.Fornecedor.ProcessarPagamento;
 
 /// <summary>
 /// A matriz de desfechos da secao 4 do PRD. Os gatilhos sao deterministicos

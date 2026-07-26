@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
 using OpenTelemetry.Metrics;
+using Pagamentos.Core.Tests.Features.Pagamentos.CriarPagamento;
 
 namespace Pagamentos.Core.Tests;
 
