@@ -164,6 +164,20 @@ Automate 1–4 rather than clicking through — see the `telemetry-testing` skil
 | Id present in BFF logs, absent in Core | Middleware not registered in Core, or registered after routing |
 | Id on the request span only | `CorrelationIdSpanProcessor` not registered |
 | Scope created, logs empty | `IncludeScopes` not enabled |
-| Trace splits into two traces at a hop | `HttpClient` created via `new HttpClient()` instead of `IHttpClientFactory` — no instrumentation, no propagation |
+| `X-Correlation-Id` missing on an outbound call while `traceparent` is fine | `HttpClient` created via `new HttpClient()` — see below |
 | Baggage empty in the handler | `Baggage.SetBaggage` called outside the request's async flow |
 | Everything works locally, breaks behind a gateway | Gateway stripping unknown headers — allowlist `traceparent`, `baggage`, `X-Correlation-Id` |
+
+### What `new HttpClient()` actually breaks
+
+A common claim is that bypassing `IHttpClientFactory` breaks the distributed trace. **On .NET 5+ it does not.** `SocketsHttpHandler` carries `DiagnosticsHandler`, so a raw `HttpClient` still starts a client span and still injects `traceparent` and `baggage`.
+
+Verified by mutation: swapping the factory client for `new HttpClient()` leaves `Chamada_de_saida_leva_traceparent_e_baggage` green and fails only `Chamada_de_saida_leva_o_header_de_correlacao`.
+
+What it really breaks:
+
+- **`X-Correlation-Id`** — the `CorrelationIdHandler` is a `DelegatingHandler` registered through the factory, so it is simply not in the chain.
+- **Service discovery** — `https+http://pagamentos-core` never resolves.
+- **Resilience** — no retry, no timeout, no circuit breaker.
+
+The rule stands (always use the factory), but diagnose accurately: a trace that still looks connected while the correlation id vanishes at one hop points here, not at the propagators.

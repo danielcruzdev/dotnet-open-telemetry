@@ -187,4 +187,15 @@ A telemetry test that has never been seen failing proves nothing — the whole f
 
 Then restore and confirm green again.
 
-**Check that the mutated code still compiles.** A mutation that breaks the build produces no test-failure output, which reads exactly like "no test caught it" and sends you off strengthening a test that was already fine. Assert zero build errors before interpreting the result, and pick mutations that stay valid C# — `return valida;` → `return true;` rather than short-circuiting a call whose `out` variable is then unassigned.
+A mutation run has three ways of lying to you. Check all three before believing "no test caught it":
+
+1. **The edit never applied.** A regex that silently fails to match leaves the file untouched. Compare a hash of the file before and after — never trust the substitution.
+2. **The build broke.** Compilation errors produce no test-failure output, which reads exactly like "nothing caught it". Assert zero build errors first, and prefer mutations that stay valid C# — `return valida;` → `return true;`, not `if (false && ...)` whose `out` variable is then unassigned, and not `if (false)` which trips unreachable-code-as-error.
+3. **The mutation changed text but not behavior.** Adding a no-op call passes both checks above and still proves nothing. Before running it, say out loud which test *should* break — if you cannot name one, the mutation is not testing anything.
+
+## Some assertions pin the framework, not your code
+
+Worth knowing which is which, because only the second kind protects you from your own regressions:
+
+- Zeroing the OTel propagator (`Sdk.SetDefaultTextMapPropagator(new CompositeTextMapPropagator([]))`) breaks **outbound** injection of `traceparent`/`baggage`, and only that.
+- **Inbound** trace continuity is not OTel's doing at all — ASP.NET Core's hosting layer parses the incoming `traceparent` through `DistributedContextPropagator`. A test asserting "the received trace-id was continued" therefore keeps passing through any OTel propagator change. It still earns its place (it fails if instrumentation is removed entirely), but do not present it as proof that your propagation code works.
