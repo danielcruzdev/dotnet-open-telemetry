@@ -5,7 +5,7 @@ Divisão do projeto em tarefas verificáveis. Referência: [PRD.md](PRD.md).
 **Regra:** uma tarefa só é marcada `[x]` quando a linha `verificar:` foi executada e passou. Build quebrado, teste falhando ou verificação pulada = tarefa não concluída. O agent `spec-keeper` mantém este arquivo.
 
 **Iniciado em:** 2026-07-26
-**Status atual:** Fase 0 concluída em 2026-07-26, com **1 bloqueio de ambiente** (ver 0.6)
+**Status atual:** Fases 0 e 1 concluídas e verificadas em 2026-07-26. 29 testes verdes. Próxima: Fase 2 (Proxy)
 
 ---
 
@@ -30,11 +30,12 @@ Agent: `aspire-wiring` · Concluída em 2026-07-26 · Aspire 13.4.6, SDK 10.0.30
   `verificar:` `dotnet run --project src/Pagamentos.AppHost` sobe os 3 e o dashboard mostra todos saudáveis
   ✔ AppHost subiu os 3 (perfil `https`); `/health` → `Healthy [HTTP 200]` em cada um; dashboard respondeu HTTP 302 em `https://localhost:17044`
   ⚠ **não verificado:** que o dashboard *exibe* os recursos — exige login interativo no browser. Ver 0.6
-- [ ] **0.6** 🔴 **BLOQUEIO** — Confiar no certificado de desenvolvimento HTTPS
+- [x] **0.6** Confiar no certificado de desenvolvimento HTTPS — resolvido em 2026-07-26
   `verificar:` `dotnet dev-certs https --check --trust` reporta o certificado como confiável, e o dashboard mostra traces após uma requisição
-  **Situação:** existem 2 certificados dev na máquina, **nenhum confiável**. O endpoint OTLP do dashboard é HTTPS, então todo export falha no handshake TLS — em silêncio. Os serviços sobem e respondem normal; o dashboard fica vazio. Confirmado pelo self-diagnostics do OTel:
-  `AuthenticationException: The remote certificate is invalid because of errors in the certificate chain: UntrustedRoot` em `TraceService/Export` e `LogsService/Export`.
-  **Ação:** o usuário precisa rodar `dotnet dev-certs https --trust` e aceitar o diálogo do Windows — é interativo, não dá para automatizar. Detalhado na skill `run-stack`.
+  **Era:** 2 certificados dev na máquina, nenhum confiável. O endpoint OTLP do dashboard é HTTPS, então todo export falhava no handshake TLS — em silêncio: serviços saudáveis, dashboard vazio. Diagnosticado pelo self-diagnostics do OTel:
+  `AuthenticationException: ... certificate chain: UntrustedRoot` em `TraceService/Export` e `LogsService/Export`.
+  ✔ resolvido com `dotnet dev-certs https --trust` (interativo, rodado pelo usuário). Após isso: cert `F84D67C5...` confiável; cada serviço mantém **3 conexões Established** para o OTLP em 21117 (antes eram só TIME_WAIT em looping); self-diagnostics dos 3 serviços **sem nenhum erro de export**
+  ⚠ **não verificado:** a renderização dos traces na UI do dashboard — exige login interativo no browser
 
 ### Notas da Fase 0
 
@@ -48,20 +49,57 @@ Agent: `otel-instrumentation` · Skills: `correlation-id`, `otel-conventions`
 
 O contrato completo em um só lugar, aplicado igualmente pelos 3 serviços. Nada aqui é opcional — um passo faltando em um serviço quebra a correlação daquele hop em diante, sem erro.
 
-- [ ] **1.1** Criar `Shared.Observability` com a constante do header, a chave de Baggage e a validação do id (até 64 chars, `[A-Za-z0-9._-]`)
+Concluída em 2026-07-26 · **29 testes, todos verdes** em `tests/Shared.Observability.Tests`
+
+- [x] **1.1** Criar `Shared.Observability` com a constante do header, a chave de Baggage e a validação do id (até 64 chars, `[A-Za-z0-9._-]`)
   `verificar:` teste unitário — id válido passa, id com aspas/espaço/longo demais é rejeitado
-- [ ] **1.2** `CorrelationIdMiddleware`: lê ou gera o id, seta no Baggage, abre o `BeginScope`, devolve o header via `OnStarting`
+  ✔ 16 casos em `CorrelationIdTests`: aceita `A1._-` e 64 chars; rejeita vazio, 65 chars, espaço, `"; DROP TABLE`, quebra de linha, acento e barra
+- [x] **1.2** `CorrelationIdMiddleware`: lê ou gera o id, seta no Baggage, abre o `BeginScope`, devolve o header via `OnStarting`
   `verificar:` teste de integração — response traz o header; id enviado é preservado; id inválido é substituído
-- [ ] **1.3** `CorrelationIdSpanProcessor` (`BaseProcessor<Activity>`) copiando o id do Baggage para tag em `OnStart`
+  ✔ 4 testes; confirmado também entre processos reais sob o AppHost
+- [x] **1.3** `CorrelationIdSpanProcessor` (`BaseProcessor<Activity>`) copiando o id do Baggage para tag em `OnStart`
   `verificar:` teste com exporter in-memory — **todos** os spans têm `correlation.id`, não só o raiz
-- [ ] **1.4** Ativar `IncludeScopes = true` no logging OTel do `ServiceDefaults`
+  ✔ span raiz, de negócio e de saída, cada um com teste próprio
+  ⚠ **descoberta:** o processor **não** alcança o span do servidor — ele nasce antes de qualquer middleware, quando o Baggage ainda está vazio. O middleware marca esse span na mão. Registrado na skill `correlation-id`
+- [x] **1.4** Ativar `IncludeScopes = true` no logging OTel do `ServiceDefaults`
   `verificar:` teste com exporter in-memory de logs — todo `LogRecord` tem o atributo `CorrelationId`
-- [ ] **1.5** `CorrelationIdHandler` (`DelegatingHandler`) gravando `X-Correlation-Id` na requisição de saída
+  ✔ já vinha ligado do template; o id é lido via `ForEachScope`, não via `LogRecord.Attributes`
+  ⚠ **limite inerente:** `Request starting`/`Request finished` do `Microsoft.AspNetCore.Hosting.Diagnostics` são emitidos fora do pipeline de middleware — nenhum escopo os alcança. Fixado em teste próprio para nunca ser lido como regressão
+- [x] **1.5** `CorrelationIdHandler` (`DelegatingHandler`) gravando `X-Correlation-Id` na requisição de saída
   `verificar:` teste com handler capturando a request — `X-Correlation-Id`, `traceparent` e `baggage` presentes
-- [ ] **1.6** Extensão única `AddCorrelation()` que registra middleware, processor e handler; aplicada nos 3 serviços
+  ✔ os 3 headers confirmados
+  ⚠ **descoberta:** capturar com `ConfigurePrimaryHttpMessageHandler` **não funciona** — trocar o primary handler tira o `DiagnosticsHandler` do caminho e some com o span de cliente e com a injeção de `traceparent`/`baggage`. O teste usa um servidor Kestrel real de eco em porta dinâmica
+- [x] **1.6** Extensão única `AddCorrelation()` que registra middleware, processor e handler; aplicada nos 3 serviços
   `verificar:` grep confirma a chamada nos 3 `Program.cs`, cada um com uma linha só
-- [ ] **1.7** Definir `Telemetry.Source` e `Telemetry.Meter` por serviço, registrados via `.AddSource()`/`.AddMeter()`
+  ✔ `grep -c AddCorrelation` → 1 em cada um dos 3. Usa `IStartupFilter` (garante o middleware em primeiro no pipeline) e `ConfigureHttpClientDefaults` (cobre todo `HttpClient`, inclusive os criados depois)
+- [x] **1.7** Definir `Telemetry.Source` e `Telemetry.Meter` por serviço, registrados via `.AddSource()`/`.AddMeter()`
   `verificar:` um span manual de teste aparece no exporter — se não aparecer, o source não foi registrado
+  ✔ `ServiceDefaultsTests` prova que source e meter nomeados pelo `ApplicationName` são captados. `.AddMeter()` faltava no `ServiceDefaults` e foi adicionado. O nome vem de `Assembly.GetName().Name` em vez de constante literal, para não poder divergir
+
+### Teste de mutação (exigido pelas tarefas 5.4/5.5/5.7)
+
+Cada peça foi removida e o teste correspondente confirmado falhando, depois restaurada:
+
+| Removido | Falhou |
+|---|---|
+| `AddProcessor(new CorrelationIdSpanProcessor())` | `Todo_span...`, `Span_de_negocio_e_span_de_saida...` |
+| `Activity.Current?.SetTag(...)` do middleware | `Span_raiz_do_servidor...` |
+| conteúdo do `BeginScope` | `Todo_log_de_aplicacao...` |
+| `CorrelationIdHandler` dos defaults de `HttpClient` | `Chamada_de_saida_leva_o_header...` |
+
+### Verificação E2E sob o AppHost
+
+Com os 3 serviços rodando como processos separados:
+
+| Cenário | BFF | Core | Proxy |
+|---|---|---|---|
+| envia `e2e-fase1` | `e2e-fase1` | `e2e-fase1` | `e2e-fase1` |
+| sem header | `25015811…` | `7d54afb2…` | `a85b17b6…` |
+| envia `invalido; DROP` | `6af0ce24…` | `27950296…` | `075f766e…` |
+
+### Correções feitas nas skills
+
+A implementação contradisse o que estava escrito. Corrigido em `correlation-id` (span raiz e logs do hosting), `service-to-service` (handler agora é global — **não** registrar por cliente), `telemetry-testing` (harness com servidor real, `ForEachScope`, xUnit em vez de FluentAssertions, spans de hosts auxiliares vazando) e `otel-conventions` (nome derivado do assembly; `ConfigureOpenTelemetryTracerProvider` não existe nesta versão).
 
 ## Fase 2 — Proxy
 
