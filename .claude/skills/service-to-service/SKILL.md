@@ -38,24 +38,19 @@ The client's job is transport and deserialization only. Business decisions belon
 ## Registration
 
 ```csharp
-builder.Services.AddTransient<CorrelationIdHandler>();
-
 builder.Services.AddHttpClient<IPagamentosCoreClient, PagamentosCoreClient>(client =>
-    {
-        client.BaseAddress = new Uri("https+http://pagamentos-core");
-        client.Timeout = TimeSpan.FromSeconds(10);
-    })
-    .AddHttpMessageHandler<CorrelationIdHandler>()
-    .AddStandardResilienceHandler();
+{
+    client.BaseAddress = new Uri("https+http://pagamentos-core");
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
 ```
 
-Three things matter here:
+That is the whole registration. Two things it relies on, both already handled:
 
 - **`https+http://pagamentos-core`** is Aspire service discovery. The name must match the resource name in the AppHost exactly. Never hardcode a port or `localhost` — that breaks the moment the AppHost assigns a different port.
-- **`AddHttpMessageHandler<CorrelationIdHandler>`** is what puts `X-Correlation-Id` on the wire. Omit it on one client and correlation dies at that hop.
-- **`AddStandardResilienceHandler`** (`Microsoft.Extensions.Http.Resilience`) gives retry, circuit breaker and timeout. Do not hand-roll a Polly pipeline.
+- **`AddStandardResilienceHandler`** and **`CorrelationIdHandler`** are applied to *every* client through `ConfigureHttpClientDefaults` — the first by `AddServiceDefaults`, the second by `AddCorrelation`.
 
-`CorrelationIdHandler` is registered `Transient` — a `DelegatingHandler` instance cannot be shared between clients, and registering it as a singleton throws at resolution time.
+**Do not add `.AddHttpMessageHandler<CorrelationIdHandler>()` per client.** `AddCorrelation` already registers it globally; adding it again puts the handler in the pipeline twice. Global registration is deliberate: forgetting the handler on a single client would break correlation at that one hop and nowhere else, which is painful to find later.
 
 ## Retries and the trace
 
@@ -90,8 +85,8 @@ Set `activity?.SetStatus(ActivityStatusCode.Error, motivo)` on infrastructure fa
 1. Typed client with an interface, in `Infrastructure/`.
 2. Registered via `AddHttpClient<TInterface, TImpl>` — never constructed manually.
 3. `BaseAddress` uses the Aspire service name.
-4. `.AddHttpMessageHandler<CorrelationIdHandler>()` present.
-5. `.AddStandardResilienceHandler()` present, timeout above the retry budget.
+4. No per-client `CorrelationIdHandler` or resilience handler — both come from the defaults.
+5. Client timeout above the retry budget.
 6. `CancellationToken` threaded through.
 7. Failure mapped to a status code and a `erro.motivo`, reason preserved.
 8. Trace verified end-to-end in the dashboard after the change.

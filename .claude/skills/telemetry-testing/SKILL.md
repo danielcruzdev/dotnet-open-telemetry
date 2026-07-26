@@ -73,15 +73,18 @@ factory.Services.GetRequiredService<TracerProvider>().ForceFlush();
 
 ### What to assert
 
+Assertions use plain xUnit `Assert` — this solution does not take a fluent-assertion dependency.
+
 **Every span carries the id — not just the root:**
 
 ```csharp
-_spans.Should().NotBeEmpty();
-_spans.Should().OnlyContain(s =>
-    s.GetTagItem("correlation.id") as string == "teste-123");
+Assert.NotEmpty(spans);
+var semTag = spans.Where(s => s.GetTagItem("correlation.id") as string != "teste-123")
+                  .Select(s => s.DisplayName).ToList();
+Assert.Empty(semTag);   // lista os culpados quando falha
 ```
 
-Asserting only on the root span is the mistake this test exists to catch: it passes even when the span processor is missing.
+Asserting only on the root span is the mistake this test exists to catch: it passes even when the span processor is missing. Keep a *separate* test for the server span specifically — it is the one the processor cannot reach, so only a dedicated assertion catches a missing manual tag.
 
 **An incoming id is honoured, not replaced:**
 
@@ -94,16 +97,32 @@ request.Headers.Add("X-Correlation-Id", "teste-123");
 
 **An invalid id is rejected and replaced** — send `X-Correlation-Id: "; DROP` and assert the response header is a fresh 32-char hex value, not the input.
 
-**Logs carry the id:**
+**Logs carry the id.** The id lives in a *scope*, not in `LogRecord.Attributes` — read it with `ForEachScope`:
 
 ```csharp
-_logs.Should().OnlyContain(r =>
-    r.Attributes!.Any(a => a.Key == "CorrelationId"));
+string? id = null;
+log.ForEachScope((scope, _) =>
+{
+    foreach (var item in scope)
+        if (item.Key == "CorrelationId") id = item.Value as string;
+}, default(object));
 ```
 
-This one catches a missing `IncludeScopes = true`, which nothing else detects.
+This catches a missing `IncludeScopes = true`, which nothing else detects.
 
-**The outbound call carries the header** — assert on the stubbed handler's captured `HttpRequestMessage` that `X-Correlation-Id`, `traceparent` and `baggage` are all present. This is the actual hop, and it is where propagation most often breaks.
+Exclude `Microsoft.AspNetCore.Hosting.Diagnostics` from the assertion — its `Request starting`/`Request finished` records are emitted outside the middleware pipeline and legitimately have no scope. Assert that gap explicitly in its own test so nobody later reads it as a regression.
+
+**The outbound call carries the propagation headers.** Do **not** capture it with `ConfigurePrimaryHttpMessageHandler` and a fake handler. Replacing the primary handler removes .NET's `DiagnosticsHandler` from the chain, and with it both the client span and the injection of `traceparent`/`baggage` — the test then fails for a reason that has nothing to do with your code.
+
+Point the client at a **real** loopback server instead and record what arrives:
+
+```csharp
+var eco = WebApplication.CreateSlimBuilder();
+eco.WebHost.UseUrls("http://127.0.0.1:0");          // porta dinamica
+// endpoint que copia context.Request.Headers
+```
+
+Then assert `X-Correlation-Id`, `traceparent` and `baggage` on the received headers. This is the actual hop, and where propagation most often breaks.
 
 **Trace continuity across a hop:** start an `Activity` in the test, call the endpoint, and assert the server span's `TraceId` equals the test activity's `TraceId` and its `ParentSpanId` is the test span. A new `TraceId` means the trace was broken.
 
@@ -115,8 +134,33 @@ Assert the failure shape too: the Proxy fault injection returns a partner outage
 
 1. Test folder mirrors the source slice folder.
 2. `public partial class Program;` present in the service under test.
-3. `ForceFlush()` before asserting on spans or logs.
-4. Span assertions use `OnlyContain`, never just the first span.
+3. `ForceFlush()` on `TracerProvider`/`LoggerProvider`/`MeterProvider` before asserting.
+4. Span assertions cover *every* span, never just the first.
 5. Incoming, missing and invalid correlation id all covered.
-6. Outbound headers asserted on a captured request.
-7. No test depends on another service being up.
+6. Outbound headers asserted against a real loopback server, not a fake primary handler.
+7. Auxiliary test servers filtered out of the assertions (see below).
+8. No test depends on another service being up.
+
+## Auxiliary hosts leak into your spans
+
+`AddAspNetCoreInstrumentation` subscribes to the ASP.NET Core `DiagnosticSource` for the whole **process**, not for one host. A loopback echo server started inside the test therefore produces server spans in your exporter — and it has no `AddCorrelation`, so those spans have no `correlation.id` and fail an "every span" assertion.
+
+Filter them out at the source:
+
+```csharp
+.AddAspNetCoreInstrumentation(o => o.Filter =
+    context => !context.Request.Path.StartsWithSegments("/recebe"))
+```
+
+## Prove the test can fail
+
+A telemetry test that has never been seen failing proves nothing — the whole failure mode here is silence. After it goes green, remove the thing it protects and confirm it goes red:
+
+| Remove | Must fail |
+|---|---|
+| `AddProcessor(new CorrelationIdSpanProcessor())` | every-span test |
+| `Activity.Current?.SetTag(...)` in the middleware | server-span test |
+| the `BeginScope` contents | log test |
+| `CorrelationIdHandler` from the client defaults | outbound-header test |
+
+Then restore and confirm green again.

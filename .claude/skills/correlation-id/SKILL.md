@@ -20,6 +20,12 @@ Never replace one with the other. Both are required.
 
 All six live in `Shared.Observability` and are wired once per service via a single extension method. A service must never hand-roll its own version.
 
+```csharp
+builder.AddCorrelation();   // a unica linha, em cada Program.cs
+```
+
+`AddCorrelation` registers the middleware through an `IStartupFilter` (guaranteeing it runs first, which a manual `app.Use...` does not) and attaches `CorrelationIdHandler` through `ConfigureHttpClientDefaults`, so it covers every `HttpClient` — including ones added later. There is nothing per-service to configure: correlation only works if all three services behave identically.
+
 ### 1. Inbound — read or generate
 
 Middleware, registered **first** in the pipeline (before routing, before any logging middleware):
@@ -63,6 +69,14 @@ Registered via `.AddProcessor<CorrelationIdSpanProcessor>()` on the tracer provi
 
 Tagging only the incoming-request span is the common mistake: the DB span, the outbound HTTP span, and any custom span would then be unsearchable by correlation id.
 
+**The processor alone does not cover the server span.** ASP.NET Core instrumentation starts the root span *before* any middleware runs, so `OnStart` fires while the Baggage is still empty. The middleware must also tag it directly:
+
+```csharp
+Activity.Current?.SetTag(CorrelationId.TagName, correlationId);
+```
+
+Verified: removing that line leaves every child span tagged and the server span bare.
+
 ### 4. Enrich every log
 
 Middleware opens a scope that stays open for the whole request:
@@ -81,6 +95,8 @@ builder.Logging.AddOpenTelemetry(o => o.IncludeScopes = true);
 ```
 
 `IncludeScopes = false` (the default) means the scope is created and then dropped — the code looks correct and produces nothing. `TraceId` and `SpanId` are attached to the log record by OTel automatically; do not add them to the scope manually.
+
+**One known gap:** `Request starting` and `Request finished`, logged by `Microsoft.AspNetCore.Hosting.Diagnostics`, are emitted outside the middleware pipeline entirely. No scope can reach them, so they carry no `CorrelationId`. This is inherent, not a defect — the contract covers application logs, and `Shared.Observability.Tests` pins the gap so it is never misread as a regression.
 
 ### 5. Echo on the response
 

@@ -40,6 +40,8 @@ builder.Logging.AddOpenTelemetry(o =>
 
 The Aspire AppHost injects `OTEL_EXPORTER_OTLP_ENDPOINT` — never hardcode the endpoint.
 
+To add to this configuration from another component (as `AddCorrelation` does with its span processor), call `AddOpenTelemetry().WithTracing(...)` again — it is additive and composes with what `ServiceDefaults` already set up. There is no `services.ConfigureOpenTelemetryTracerProvider(...)` in the version pinned here.
+
 `serviceName` is what separates the three services in the dashboard. Getting it wrong makes every span look like it came from one app.
 
 ## ActivitySource and Meter
@@ -47,17 +49,18 @@ The Aspire AppHost injects `OTEL_EXPORTER_OTLP_ENDPOINT` — never hardcode the 
 One of each per service, defined once as static, named after the assembly:
 
 ```csharp
-public static class Telemetry
+internal static class Telemetry
 {
-    public const string ActivitySourceName = "Pagamentos.Core";
-    public const string MeterName = "Pagamentos.Core";
+    public static readonly string Name = typeof(Telemetry).Assembly.GetName().Name!;
 
-    public static readonly ActivitySource Source = new(ActivitySourceName);
-    public static readonly Meter Meter = new(MeterName);
+    public static readonly ActivitySource Source = new(Name);
+    public static readonly Meter Meter = new(Name);
 }
 ```
 
-`ActivitySource` and `Meter` are thread-safe and meant to be long-lived — never create one per request. And every source name must be passed to `.AddSource(...)`: an unregistered source produces `Activity.Current == null` and your spans vanish with no error.
+The name is **derived from the assembly, not written as a literal**. `ServiceDefaults` registers `.AddSource(ApplicationName)` and `.AddMeter(ApplicationName)`, and `ApplicationName` is the entry assembly name — so deriving it makes the two impossible to drift apart. A hand-typed constant that stops matching produces no spans and no error.
+
+`ActivitySource` and `Meter` are thread-safe and meant to be long-lived — never create one per request.
 
 ## When to create a span
 
