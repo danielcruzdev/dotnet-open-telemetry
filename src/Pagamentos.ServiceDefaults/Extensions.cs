@@ -57,7 +57,10 @@ public static class Extensions
             {
                 metrics.AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
-                    .AddRuntimeInstrumentation();
+                    .AddRuntimeInstrumentation()
+                    // Espelha o AddSource abaixo: cada servico nomeia seu
+                    // Meter pelo nome do assembly, que e o ApplicationName.
+                    .AddMeter(builder.Environment.ApplicationName);
             })
             .WithTracing(tracing =>
             {

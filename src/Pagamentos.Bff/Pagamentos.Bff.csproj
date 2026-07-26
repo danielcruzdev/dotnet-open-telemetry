@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Pagamentos.ServiceDefaults\Pagamentos.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\Shared.Observability\Shared.Observability.csproj" />
   </ItemGroup>
 
 </Project>
