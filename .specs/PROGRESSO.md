@@ -5,7 +5,7 @@ Divisão do projeto em tarefas verificáveis. Referência: [PRD.md](PRD.md).
 **Regra:** uma tarefa só é marcada `[x]` quando a linha `verificar:` foi executada e passou. Build quebrado, teste falhando ou verificação pulada = tarefa não concluída. O agent `spec-keeper` mantém este arquivo.
 
 **Iniciado em:** 2026-07-26
-**Status atual:** Fases 0, 1 e 2 concluídas e verificadas em 2026-07-26. 46 testes verdes. Próxima: Fase 3 (Core)
+**Status atual:** Fases 0 a 3 concluídas e verificadas em 2026-07-26. 83 testes verdes. Próxima: Fase 4 (BFF)
 
 ---
 
@@ -166,18 +166,58 @@ Toda resposta não-200 usa a **mesma forma**, para o Core ter só um formato a e
 
 Agents: `slice-builder`, `otel-instrumentation` · Skills: `vertical-slice`, `service-to-service`
 
-- [ ] **3.1** Cliente tipado `IFornecedorProxyClient` com `CorrelationIdHandler` e `AddStandardResilienceHandler`, apontando para `https+http://pagamentos-proxy`
+Concluída em 2026-07-26 · **34 testes** em `tests/Pagamentos.Core.Tests`
+
+- [x] **3.1** Cliente tipado `IFornecedorProxyClient` com `CorrelationIdHandler` e `AddStandardResilienceHandler`, apontando para `https+http://pagamentos-proxy`
   `verificar:` sem porta hardcoded no código; a chamada resolve com o AppHost rodando
-- [ ] **3.2** Slice `Features/Pagamentos/CriarPagamento/` — valida a chave PIX, chama o Proxy, traduz o resultado
+  ✔ resolve sob o AppHost; nenhuma porta nem `localhost` no código
+  ⚠ **desvio da tarefa:** os dois handlers **não** são registrados por cliente. Desde a Fase 1 eles vêm de `ConfigureHttpClientDefaults` (`AddCorrelation` e `AddServiceDefaults`), e registrar de novo duplicaria o handler no pipeline. O texto da tarefa é anterior a essa correção
+- [x] **3.2** Slice `Features/Pagamentos/CriarPagamento/` — valida a chave PIX, chama o Proxy, traduz o resultado
   `verificar:` chave inválida retorna `422 chave_invalida` **sem** chamar o Proxy (confirmar no trace: nenhum span do Proxy)
-- [ ] **3.3** Slice `Features/Pagamentos/ConsultarPagamento/`
+  ✔ `422 chave_invalida`, zero chamadas ao Proxy e **nenhum span de cliente** no trace
+- [x] **3.3** Slice `Features/Pagamentos/ConsultarPagamento/`
   `verificar:` `GET /pagamentos/{id}` percorre a cadeia e retorna o status
-- [ ] **3.4** Span de negócio `ValidarChavePix` com atributo `pix.chave.tipo` — nunca a chave em si
+  ✔ o id emitido pelo Proxy é consultável através do Core; id desconhecido → 404
+- [x] **3.4** Span de negócio `ValidarChavePix` com atributo `pix.chave.tipo` — nunca a chave em si
   `verificar:` o span existe e nenhum atributo contém o valor da chave
-- [ ] **3.5** Mapear falhas do Proxy conforme a tabela da skill `service-to-service`, preservando o motivo
+  ✔ span presente com `pix.chave.tipo = Email`; teste varre todas as tags de todos os spans e falha se a chave aparecer
+- [x] **3.5** Mapear falhas do Proxy conforme a tabela da skill `service-to-service`, preservando o motivo
   `verificar:` o motivo `saldo_insuficiente` gerado no Proxy chega íntegro na resposta do Core
-- [ ] **3.6** Métricas `pagamentos.solicitados` e `pagamentos.duracao`
+  ✔ `saldo_insuficiente`, `fornecedor_timeout` e `fornecedor_indisponivel` chegam sem tradução
+- [x] **3.6** Métricas `pagamentos.solicitados` e `pagamentos.duracao`
   `verificar:` presentes no dashboard, sem nenhuma tag de alta cardinalidade
+  ✔ ambas publicadas, `status` separando `aprovado`/`recusado`; teste dedicado rejeita `correlation.id`, `pagamento.id` e derivados de chave
+
+### Cadeia Core → Proxy verificada sob o AppHost
+
+| Cenário | HTTP | status | motivo | ms |
+|---|---|---|---|---|
+| sucesso | 200 | aprovado | — | 434 |
+| chave inválida | 422 | recusado | `chave_invalida` | 13 |
+| saldo (gerado no Proxy) | 422 | recusado | `saldo_insuficiente` | 21 |
+| timeout (gerado no Proxy) | 504 | erro | `fornecedor_timeout` | 6199 |
+| indisponível + retries | 502 | erro | `fornecedor_indisponivel` | 8974 |
+
+Os 6199 ms e 8974 ms são o backoff de retry **em produção** — confirmam que o retry exigido pelo PRD acontece de fato. `X-Correlation-Id` preservado em todas. `GET /pagamentos/{id}` → 200; id desconhecido → 404.
+
+### Teste de mutação
+
+| Alterado | Falhou |
+|---|---|
+| validação da chave sempre passa | `Chave_invalida_e_recusada_sem_chamar_o_proxy`, `Chave_invalida_nao_gera_span_de_cliente` |
+| motivo do Proxy vira `erro_interno` | `Falha_do_proxy_preserva_o_motivo` |
+| recusa do Proxy tratada como falha de infra | 3 testes |
+| chave PIX na tag do span | `Nenhum_span_carrega_a_chave_pix` + 1 |
+| métrica com tag por pagamento | `Metricas_nao_usam_tag_de_alta_cardinalidade` + 1 |
+
+⚠ **armadilha do harness:** a primeira tentativa de mutação não compilou (`CS0165`), e falha de build não gera linha `FAIL` — o resultado parecia "nenhum teste pegou". Registrado na skill `telemetry-testing`: sempre conferir que o código mutado ainda compila antes de interpretar.
+
+### Decisões
+
+- **Motivo próprio para o Proxy inalcançável.** Falha de transporte até o Proxy vira `proxy_indisponivel`/`proxy_timeout`, distinto de `fornecedor_*` que o Proxy respondeu. Localizar o hop é o objetivo do projeto, e um motivo único para os dois casos apagaria essa distinção.
+- **Retry mantido no `POST`, apesar de não ser idempotente.** O PRD exige "502 após retries" e a visibilidade das tentativas como spans irmãos. Em sistema real isso exigiria chave de idempotência — anotado como limite conhecido, não como acidente.
+- **Backoff reduzido para 1 ms nos testes** via `ConfigureAll<HttpStandardResilienceOptions>`. Sem isso a suíte levava 24 s; agora 1 s. Dois testes fixam que o retry continua acontecendo e que 422 **não** é retentado.
+- **O Core não guarda estado.** Quem emite o `pagamentoId` é o fornecedor, então a consulta atravessa a cadeia em vez de duplicar o razão.
 
 ## Fase 4 — BFF
 
@@ -249,4 +289,6 @@ Agent: `spec-keeper`
 
 ## Tarefas descobertas
 
-_Adicionar aqui o que a implementação revelar e o plano não previu. Cada uma com sua linha `verificar:`._
+- [x] **D1** (descoberta na Fase 3) Endpoint de consulta no Proxy — `GET /fornecedor/pagamentos/{id}`
+  `verificar:` pagamento aprovado é consultável; id desconhecido devolve 404
+  ✔ a Fase 2 só previu o `POST`, mas a tarefa 3.3 exige que a consulta percorra a cadeia. O fornecedor é quem emite o `pagamentoId`, então é ele quem responde pela consulta — guardar o mesmo estado no Core criaria duas versões da verdade. 3 testes em `Pagamentos.Proxy.Tests`
