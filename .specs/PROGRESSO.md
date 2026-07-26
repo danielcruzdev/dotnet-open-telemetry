@@ -5,7 +5,7 @@ Divisão do projeto em tarefas verificáveis. Referência: [PRD.md](PRD.md).
 **Regra:** uma tarefa só é marcada `[x]` quando a linha `verificar:` foi executada e passou. Build quebrado, teste falhando ou verificação pulada = tarefa não concluída. O agent `spec-keeper` mantém este arquivo.
 
 **Iniciado em:** 2026-07-26
-**Status atual:** Fases 0 a 3 concluídas e verificadas em 2026-07-26. 83 testes verdes. Próxima: Fase 4 (BFF)
+**Status atual:** Fases 0 a 4 concluídas e verificadas em 2026-07-26. 103 testes verdes. A cadeia BFF -> Core -> Proxy funciona ponta a ponta. Próxima: Fase 5 (testes) e Fase 6 (validação E2E no dashboard)
 
 ---
 
@@ -223,16 +223,68 @@ Os 6199 ms e 8974 ms são o backoff de retry **em produção** — confirmam que
 
 Agents: `slice-builder`, `otel-instrumentation` · Skills: `vertical-slice`, `service-to-service`
 
-- [ ] **4.1** Cliente tipado `IPagamentosCoreClient` apontando para `https+http://pagamentos-core`, com os dois handlers
+Concluída em 2026-07-26 · **20 testes** em `tests/Pagamentos.Bff.Tests`
+
+- [x] **4.1** Cliente tipado `IPagamentosCoreClient` apontando para `https+http://pagamentos-core`, com os dois handlers
   `verificar:` o trace mostra o span client do BFF ligado ao span server do Core
-- [ ] **4.2** Slice `Features/Pagamentos/CriarPagamento/` — validação de formato, chamada ao Core, adaptação da resposta
+  ✔ o teste lê o `traceparent` que **chegou** ao Core e confere: `trace-id` igual ao do span de cliente e `parent-span-id` igual ao `SpanId` dele — ligação provada, não inferida
+  ⚠ mesmo desvio da 3.1: os handlers vêm de `ConfigureHttpClientDefaults`, não por cliente
+- [x] **4.2** Slice `Features/Pagamentos/CriarPagamento/` — validação de formato, chamada ao Core, adaptação da resposta
   `verificar:` `POST` no BFF percorre os 3 serviços e retorna aprovação
-- [ ] **4.3** Slice `Features/Pagamentos/ConsultarPagamento/`
+  ✔ `200 aprovado` atravessando BFF → Core → Proxy. Só formato aqui (`valor > 0`, chave presente); a regra da chave PIX é do Core
+- [x] **4.3** Slice `Features/Pagamentos/ConsultarPagamento/`
   `verificar:` `GET` percorre a cadeia completa
-- [ ] **4.4** Confirmar o BFF como gerador natural do id, com log de entrada ancorando a investigação
+  ✔ `GET /pagamentos/{id}` → 200 com o id emitido pelo Proxy; desconhecido → 404
+- [x] **4.4** Confirmar o BFF como gerador natural do id, com log de entrada ancorando a investigação
   `verificar:` requisição sem header gera id novo; com header, preserva — ambos visíveis no log de entrada
-- [ ] **4.5** Propagar o motivo de recusa até o cliente, sem degradar para erro genérico
+  ✔ sem header gera (`55f2ae84…`); com header preserva; o id do log de entrada é **o mesmo** devolvido no header ao cliente. Dois testes fixam a existência desse log, inclusive quando a requisição é recusada no próprio BFF
+- [x] **4.5** Propagar o motivo de recusa até o cliente, sem degradar para erro genérico
   `verificar:` o cenário de saldo insuficiente chega ao cliente como `422 saldo_insuficiente`
+  ✔ `saldo_insuficiente`, `chave_invalida`, `fornecedor_timeout` e `fornecedor_indisponivel` chegam intactos ao cliente
+
+### 🐛 Bug encontrado só no AppHost
+
+`timeout` e `indisponivel` voltavam **`500` com stack trace, após 30 s**, em vez do motivo. A suíte não pegava porque o Core falso responde instantâneo. Diagnóstico pelo corpo da resposta real:
+
+```
+Polly.Timeout.TimeoutRejectedException: The operation didn't complete
+within the allowed timeout of '00:00:30'
+```
+
+Duas causas, ambas corrigidas com teste de regressão antes da correção:
+
+1. **Amplificação de retry.** O BFF retentava o Core (3×) enquanto o Core retentava o Proxy (3×), com backoff composto — estourava o `TotalRequestTimeout`. Retry agora acontece só na camada mais interna.
+2. **`TimeoutRejectedException` não capturada.** É tipo da Polly e não deriva de `HttpRequestException` nem de `TaskCanceledException`, então escapava como 500 e apagava o motivo no último metro. Capturada junto com `BrokenCircuitException`.
+
+Duas armadilhas silenciosas encontradas no caminho, ambas registradas na skill `service-to-service`:
+
+- `MaxRetryAttempts = 0` **lança** na validação — o mínimo é 1. Desligar o retry é pelo predicado `ShouldHandle`.
+- As opções chamam-se **`"-standard"`**, não `"{cliente}-standard"`: o handler vem de `ConfigureHttpClientDefaults`, cujo builder tem `Name` vazio. Passar o nome do cliente compila, roda e é ignorado sem aviso.
+
+### Cadeia completa BFF → Core → Proxy, sob o AppHost
+
+| Cenário | HTTP | status | motivo | ms |
+|---|---|---|---|---|
+| sucesso (3 serviços) | 200 | aprovado | — | 1311 |
+| valor inválido (para no BFF) | 422 | recusado | `valor_invalido` | 30 |
+| chave inválida (para no Core) | 422 | recusado | `chave_invalida` | 30 |
+| saldo (gerado no Proxy) | 422 | recusado | `saldo_insuficiente` | 37 |
+| timeout (gerado no Proxy) | 504 | erro | `fornecedor_timeout` | 9405 |
+| indisponível (gerado no Proxy) | 502 | erro | `fornecedor_indisponivel` | 6720 |
+| latência alta (Proxy) | 200 | aprovado | — | 3029 |
+
+Sem header, o BFF gerou `55f2ae84…`. Consulta atravessando os 3 → 200.
+
+### Teste de mutação
+
+| Alterado | Falhou |
+|---|---|
+| motivo do Core degrada para genérico | `Motivo_atravessa_os_tres_servicos_sem_degradar` |
+| recusa do Core perde o motivo | 2 testes |
+| `request.Valor <= 0` → `< 0` | `Valor_nao_positivo_e_recusado_sem_chamar_o_core(0)` |
+| remove o log de entrada | `Existe_log_de_entrada...`, `Recusa_de_formato_registra_log...` |
+
+⚠ a mutação do log de entrada **escapou na primeira rodada** — a asserção original dizia "todo log da requisição tem o id", o que continua verdade sem o log de entrada. Os dois testes acima foram acrescentados para fixar a existência dele, que é o que a tarefa 4.4 realmente pede.
 
 ## Fase 5 — Testes
 
