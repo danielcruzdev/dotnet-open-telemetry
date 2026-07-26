@@ -5,7 +5,7 @@ Divisão do projeto em tarefas verificáveis. Referência: [PRD.md](PRD.md).
 **Regra:** uma tarefa só é marcada `[x]` quando a linha `verificar:` foi executada e passou. Build quebrado, teste falhando ou verificação pulada = tarefa não concluída. O agent `spec-keeper` mantém este arquivo.
 
 **Iniciado em:** 2026-07-26
-**Status atual:** Fases 0 a 5 concluídas e verificadas em 2026-07-26. 123 testes verdes. A cadeia BFF -> Core -> Proxy funciona ponta a ponta. Próxima: Fase 6 (validação E2E no dashboard)
+**Status atual:** Fases 0 a 5 concluídas. Fase 6 parcial: auditoria de código sem achados, leitura do dashboard pendente do usuário. 123 testes verdes.
 
 ---
 
@@ -349,16 +349,51 @@ Agent: `observability-reviewer` · Skill: `run-stack`
 
 Aqui os critérios de aceite do PRD são verificados de verdade, no dashboard.
 
+**Parcialmente concluída em 2026-07-26.** A parte de código está fechada; a leitura visual do dashboard depende de login interativo no browser e ficou pendente do usuário.
+
 - [ ] **6.1** Trace único atravessando os 3 serviços, com 6 spans, para um pagamento bem-sucedido
   `verificar:` filtrar por `correlation.id` no dashboard e descrever a árvore observada
+  ⏳ **pendente do usuário.** Cenário já disparado com `correlation.id = fase6-sucesso`. O que já está provado por outro caminho: o export OTLP funciona (Fase 0.6 — 3 conexões Established, zero erro de export) e a árvore de spans é asserida em teste. Falta confirmar a renderização
 - [ ] **6.2** Os 6 cenários da seção 4 do PRD reproduzidos, cada um mostrando no dashboard qual serviço falhou e o `erro.motivo`
   `verificar:` percorrer um a um e registrar o resultado
+  ✔ **reprodutibilidade confirmada** — os 6 rodaram com ids próprios (tabela abaixo)
+  ⏳ **pendente do usuário:** a leitura do `erro.motivo` no dashboard
 - [ ] **6.3** Logs dos 3 serviços correlacionados em uma linha do tempo por `CorrelationId`
   `verificar:` filtrar nos structured logs do dashboard
-- [ ] **6.4** Auditoria do `observability-reviewer`: PII, cardinalidade de métrica, semântica de erro, `new HttpClient` residual
+  ⏳ **pendente do usuário.** Que todo log de aplicação carrega o `CorrelationId` está fixado em teste nos 4 projetos; falta ver os três serviços numa linha do tempo só
+- [x] **6.4** Auditoria do `observability-reviewer`: PII, cardinalidade de métrica, semântica de erro, `new HttpClient` residual
   `verificar:` relatório sem achado de severidade alta
+  ✔ **sem achados.** `new HttpClient(` em `src/`: zero. URL com porta ou `localhost` em `src/`: zero. `AddCorrelation` uma vez por serviço. Tags de span: `erro.motivo`, `fornecedor.nome`, `fornecedor.resultado`, `pagamento.id`, `pagamento.status`, `pix.chave.tipo`, `pix.chave.valida` — nenhuma carrega valor identificável. Tags de métrica: só `status` (3 valores) e `resultado` (4 valores). `SetStatus(Error)` aparece **só** nos três métodos de falha de infraestrutura, nunca em recusa de negócio. Nenhum log com interpolação nem com a chave crua
 - [ ] **6.5** Conferir os 10 critérios de aceite do PRD, um a um
   `verificar:` todos passam; qualquer falha volta como tarefa nova nesta fase
+  Ver tabela abaixo: **5 confirmados**, 4 dependem do dashboard, 1 é da Fase 7
+
+### Cenários disparados (2026-07-26), prontos para busca no dashboard
+
+| # | Cenário | `correlation.id` | HTTP | motivo | ms |
+|---|---|---|---|---|---|
+| 1 | sucesso | `fase6-sucesso` | 200 | — | 619 |
+| 2 | saldo insuficiente | `fase6-saldo` | 422 | `saldo_insuficiente` | 28 |
+| 3 | chave inválida | `fase6-chave` | 422 | `chave_invalida` | 9 |
+| 4 | timeout do parceiro | `fase6-timeout` | 504 | `fornecedor_timeout` | 9547 |
+| 5 | parceiro indisponível | `fase6-indisp` | 502 | `fornecedor_indisponivel` | 8127 |
+| 6 | latência alta | `fase6-lento` | 200 | — | 3025 |
+| 7 | consulta | `fase6-consulta` | 200 | — | — |
+
+### Critérios de aceite do PRD
+
+| # | Critério | Situação |
+|---|---|---|
+| 1 | AppHost sobe os 3 saudáveis | ✔ confirmado |
+| 2 | `POST` sem header devolve o header preenchido | ✔ confirmado |
+| 3 | id enviado preservado em cada hop e em todos os spans | ◐ header confirmado E2E; atributo de span confirmado em teste por serviço — falta ver os 3 num trace só |
+| 4 | filtrar por `correlation.id` traz um trace atravessando os 3 | ⏳ dashboard |
+| 5 | todo log tem `CorrelationId`, `TraceId`, `SpanId` | ◐ fixado em teste; falta a visão combinada |
+| 6 | os 6 cenários reproduzíveis, com o serviço culpado visível | ◐ reprodutibilidade ✔; leitura no dashboard ⏳ |
+| 7 | motivo do Proxy chega íntegro ao BFF | ✔ confirmado E2E |
+| 8 | suíte cobre id recebido/ausente/inválido, spans, logs e headers | ✔ 123 testes |
+| 9 | nenhum dado sensível em span ou log | ✔ auditoria 6.4 + testes dedicados |
+| 10 | README com o passo a passo de investigação | ✗ Fase 7 |
 
 ## Fase 7 — Documentação
 
