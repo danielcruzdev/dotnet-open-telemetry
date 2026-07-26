@@ -46,7 +46,8 @@ public static class ProcessarPagamentoEndpoint
 
     private static Ok<ProcessarPagamentoResponse> Aprovado(RespostaFornecedor resposta, ILogger logger)
     {
-        var pagamentoId = Guid.NewGuid();
+        // O id vem do simulador, que e quem guarda o razao consultavel.
+        var pagamentoId = resposta.PagamentoId!.Value;
         Activity.Current?.SetTag("pagamento.id", pagamentoId);
         Activity.Current?.SetTag("pagamento.status", "aprovado");
 

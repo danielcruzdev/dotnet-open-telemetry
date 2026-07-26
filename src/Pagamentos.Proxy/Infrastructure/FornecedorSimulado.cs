@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Options;
@@ -20,7 +21,8 @@ public enum ResultadoFornecedor
     Indisponivel,
 }
 
-public sealed record RespostaFornecedor(ResultadoFornecedor Resultado, string? Autorizacao);
+public sealed record RespostaFornecedor(
+    ResultadoFornecedor Resultado, Guid? PagamentoId, string? Autorizacao);
 
 /// <summary>
 /// Faz o papel do banco parceiro. Os desfechos sao deterministicos por valor
@@ -34,6 +36,8 @@ internal sealed class FornecedorSimulado(IOptions<FornecedorOptions> options)
     // Criado uma vez: instrumento por chamada nao agrega.
     private static readonly Counter<long> Chamadas =
         Telemetry.Meter.CreateCounter<long>("fornecedor.chamadas");
+
+    private readonly ConcurrentDictionary<Guid, string> _pagamentos = new();
 
     private const decimal LimiteDeSaldo = 1000m;
     private const decimal GatilhoTimeout = 999.99m;
@@ -59,6 +63,15 @@ internal sealed class FornecedorSimulado(IOptions<FornecedorOptions> options)
 
         activity?.SetTag("fornecedor.resultado", resultado.ToString());
 
+        // O fornecedor e quem emite o pagamentoId, entao e ele quem guarda
+        // o razao. Estado em memoria: persistencia real esta fora do escopo.
+        Guid? pagamentoId = null;
+        if (resultado is ResultadoFornecedor.Aprovado)
+        {
+            pagamentoId = Guid.NewGuid();
+            _pagamentos[pagamentoId.Value] = "aprovado";
+        }
+
         // Tag de baixa cardinalidade: um enum de quatro valores. Nunca o
         // pagamento.id nem o correlation.id, que criariam uma serie
         // temporal por requisicao.
@@ -66,8 +79,12 @@ internal sealed class FornecedorSimulado(IOptions<FornecedorOptions> options)
 
         return new RespostaFornecedor(
             resultado,
+            pagamentoId,
             resultado is ResultadoFornecedor.Aprovado ? GerarAutorizacao() : null);
     }
+
+    public bool TentarConsultar(Guid pagamentoId, out string status) =>
+        _pagamentos.TryGetValue(pagamentoId, out status!);
 
     private static string GerarAutorizacao() =>
         $"AUT-{Random.Shared.Next(10000, 99999)}";

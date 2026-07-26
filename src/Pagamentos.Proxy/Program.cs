@@ -1,3 +1,4 @@
+using Pagamentos.Proxy.Features.Fornecedor.ConsultarPagamento;
 using Pagamentos.Proxy.Features.Fornecedor.ProcessarPagamento;
 using Pagamentos.Proxy.Infrastructure;
 using Shared.Observability;
@@ -15,6 +16,7 @@ var app = builder.Build();
 app.MapDefaultEndpoints();
 
 ProcessarPagamentoEndpoint.Map(app);
+ConsultarPagamentoEndpoint.Map(app);
 
 app.Run();
 
