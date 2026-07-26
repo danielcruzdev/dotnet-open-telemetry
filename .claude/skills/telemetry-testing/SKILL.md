@@ -186,3 +186,5 @@ A telemetry test that has never been seen failing proves nothing — the whole f
 | `CorrelationIdHandler` from the client defaults | outbound-header test |
 
 Then restore and confirm green again.
+
+**Check that the mutated code still compiles.** A mutation that breaks the build produces no test-failure output, which reads exactly like "no test caught it" and sends you off strengthening a test that was already fine. Assert zero build errors before interpreting the result, and pick mutations that stay valid C# — `return valida;` → `return true;` rather than short-circuiting a call whose `out` variable is then unassigned.
