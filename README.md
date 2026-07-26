@@ -156,6 +156,45 @@ curl -i -k -X POST https://localhost:<porta-bff>/pagamentos \
 
 A porta do BFF é atribuída pelo AppHost — leia na página **Recursos** do dashboard.
 
+## Gerando volume
+
+Uma requisição de cada vez mostra o mecanismo, mas não como o painel se comporta com tráfego. `loadtest/pagamentos.js` é um gerador em [k6](https://k6.io) que cobre os desfechos da tabela acima, repartidos em três cenários — não é teste de performance, e não há threshold que reprove a execução. O critério é o que aparece no dashboard.
+
+Com a stack rodando:
+
+```bash
+docker run --rm -i -v "${PWD}/loadtest:/scripts" grafana/k6 run /scripts/pagamentos.js \
+  -e BFF_URL=https://host.docker.internal:7048 -e CENARIO=mix
+```
+
+Não precisa instalar nada além do Docker. Dois detalhes do comando não são decorativos:
+
+- **`host.docker.internal`** — dentro do container, `localhost` é o próprio container. Sem isso nada conecta.
+- **`insecureSkipTLSVerify`**, já no script — o dev cert não é confiável para o container. Sem isso toda requisição morre no handshake, exatamente como no aviso lá de cima.
+
+A porta `7048` é a do `launchSettings.json` do BFF e é o default do script; sobrescreva com `-e BFF_URL` se a sua for outra.
+
+| `CENARIO` | Carga | Gera |
+|---|---|---|
+| `fumaca` | 1 VU, 30s | só aprovado — confirma que a rota responde |
+| `mix` *(default)* | 10 VUs, 2m | desfechos de negócio: 70% aprovado, resto recusas |
+| `falhas` | 5 VUs, 1m | falhas de infra: timeout, indisponível e recusas |
+
+A divisão entre `mix` e `falhas` não é arbitrária. O `AddStandardResilienceHandler` abre o circuito com 10% de 5xx numa janela de 30s, e cada retry conta como tentativa — misturar 10% de falha de infra na carga do `mix` levava a razão real a mais de 30%, o circuito abria e *toda* requisição virava `502 core_indisponivel`, inclusive as aprovadas. O `falhas` roda com vazão baixa de propósito, abaixo das 100 amostras mínimas que o breaker exige para agir.
+
+Cada iteração manda `X-Correlation-Id: k6-<cenário>-<vu>-<iteração>`, então a carga inteira é rastreável: filtre por `k6-mix` em **Rastreamentos** e todos os traces daquela execução aparecem. O `mix` também consulta os pagamentos que aprovou — é o único tráfego que a rota `GET /pagamentos/{id}` recebe.
+
+O k6 checa o status esperado de cada caso, e é isso que prova que o gerador exercita o que diz exercitar — saída do `falhas`:
+
+```
+✓ fornecedor_timeout: status 504
+✓ fornecedor_indisponivel: status 502
+✓ chave_invalida: status 422
+checks_succeeded...: 100.00% 118 out of 118
+```
+
+> **Ignore o `http_req_failed`.** O k6 conta todo não-2xx como falha, então ele marca 100% no `falhas` e ~17% no `mix` — são os 422, que aqui são desfecho esperado, não erro. Olhe os checks. O `falhas` também estoura um pouco a duração: o caso `999.98` faz retries e uma iteração leva até ~11s para terminar.
+
 ## Outros backends
 
 Nada aqui é específico do Aspire Dashboard. Todo o contrato de correlação são atributos OTLP comuns, então `correlation.id` e `CorrelationId` chegam iguais em qualquer backend.
@@ -173,6 +212,7 @@ src/
   Pagamentos.Core/             negócio
   Pagamentos.Proxy/            fornecedor simulado
 tests/                         123 testes, espelhando os slices
+loadtest/                      gerador de tráfego em k6
 .claude/                       agents e skills (convenções do projeto)
 .specs/                        PRD e PROGRESSO
 ```
